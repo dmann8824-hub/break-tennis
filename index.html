@@ -1,23 +1,35 @@
-<!--
-  BREAK — tennis momentum tracker + World Cup 2026 football
-  ============================================================
-  One file. Sport selector (🎾 Tennis / ⚽ Football). Tennis is default.
-  Football uses free ESPN API — no keys, no hardcoded fixtures.
-  ALL tennis logic is fully preserved and runs when currentSport === "tennis".
-  Football mode renders only when currentSport === "football".
--->
 <!DOCTYPE html>
+<!--
+  BREAK — tennis momentum tracker (native-app rebuild)
+  =====================================================
+  One file. Four tabs (Home / Matches / Analysis / Share) shown and hidden with
+  JavaScript — no router, no reloads. Vanilla HTML/CSS/JS, no libraries.
+
+  Preserved from the previous version (re-skinned, logic intact):
+    • Math: strengthScore, winProbabilities, pressureScore, serveDirection, buildServeChart
+    • FALLBACK_DATA (the hardcoded Roland-Garros final)
+    • RapidAPI live + fixtures fetches (same endpoint, headers, key)
+    • The 1080x1350 premium share-card canvas drawing
+    • Surface theming via data-surface + localStorage "break_surface"
+    • Venue-local time labels with the flashscore.com disclaimer
+    • Skeleton screens and the fetch fallback chain
+-->
 <html lang="en" data-surface="clay" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Break · Multi‑Sport Momentum Tracker</title>
+  <title>Break · Tennis Momentum Tracker</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
   <style>
+    /* =========================================================
+       COLOR SYSTEM
+       Base colors are theme-dependent (dark/light). The accent is
+       surface-dependent (clay/grass/hard). Everything reads these vars.
+       ========================================================= */
     :root {
       --bg:          #090b0d;
       --card-bg:     #11161a;
@@ -29,11 +41,14 @@
       --nav-bg:      #0d1115;
       --card-shadow: 0 4px 24px rgba(0, 0, 0, 0.40);
       --glow-alpha:  0.08;
-      --red:         #c97d7d;
-      --gold:        #f0c040;
+      --red:         #c97d7d;  /* muted warm red for "dipping" / errors */
+      --gold:        #f0c040;  /* grand-slam badge dot */
+
       --accent:      #e07b3e;
       --accent-rgb:  224, 123, 62;
     }
+
+    /* Light mode: swap base colors, keep accents. */
     html[data-theme="light"] {
       --bg:          #f5f6f8;
       --card-bg:     #ffffff;
@@ -46,254 +61,901 @@
       --card-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
       --glow-alpha:  0.05;
     }
+
+    /* Surface accent swaps. */
     html[data-surface="clay"]  { --accent: #e07b3e; --accent-rgb: 224, 123, 62; }
     html[data-surface="grass"] { --accent: #3ea86a; --accent-rgb: 62, 168, 106; }
     html[data-surface="hard"]  { --accent: #4a90d9; --accent-rgb: 74, 144, 217; }
-    html[data-sport="football"] { --accent: #2e7d32; --accent-rgb: 46,125,50; }
-    html[data-sport="football"] .surface-pick { display: none; }
 
-    * { box-sizing:border-box; margin:0; padding:0; transition:background-color 0.4s ease,border-color 0.4s ease,color 0.4s ease,fill 0.4s ease,stroke 0.4s ease,box-shadow 0.4s ease; }
-    html, body { height:100%; }
-    body {
-      font-family:"Space Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-      background:var(--bg); color:var(--text); line-height:1.4; font-feature-settings:"tnum" 1;
-      -webkit-font-smoothing:antialiased; min-height:100vh;
-      background-image:radial-gradient(circle at 92% -2%,rgba(var(--accent-rgb),var(--glow-alpha)),transparent 55%);
-      background-attachment:fixed;
+    /* =========================================================
+       RESETS + GLOBAL TRANSITIONS (the surface/theme glide)
+       ========================================================= */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      transition:
+        background-color 0.4s ease,
+        border-color 0.4s ease,
+        color 0.4s ease,
+        fill 0.4s ease,
+        stroke 0.4s ease,
+        box-shadow 0.4s ease;
     }
 
-    .topbar { position:sticky; top:0; z-index:50; height:48px; display:flex; align-items:center; justify-content:space-between; padding:0 16px; background:var(--bg); border-bottom:1px solid var(--card-border); }
-    .brand { display:flex; align-items:center; gap:8px; font-size:18px; font-weight:700; letter-spacing:-0.4px; }
-    .brand-dot { width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 12px rgba(var(--accent-rgb),0.9); flex:none; }
-    .brand-live { width:8px; height:8px; border-radius:50%; background:#3ea86a; box-shadow:0 0 8px rgba(62,168,106,0.9); flex:none; animation:pulse 1.5s ease-in-out infinite; }
-    .topbar-right { display:flex; align-items:center; gap:10px; }
-    .icon-btn { background:var(--card-bg); border:1px solid var(--card-border); border-radius:9px; color:var(--text); width:34px; height:34px; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:transform 0.15s ease,border-color 0.4s ease; }
-    .icon-btn:hover { border-color:var(--accent); transform:scale(1.05); }
-    .icon-btn:active { transform:scale(0.95); }
-    .surface-pick { position:relative; }
-    select { appearance:none; -webkit-appearance:none; background:var(--card-bg); color:var(--text); border:1px solid var(--card-border); border-radius:9px; padding:8px 30px 8px 12px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; outline:none; }
-    select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-    .surface-pick::after { content:""; position:absolute; right:12px; top:50%; width:6px; height:6px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:translateY(-65%) rotate(45deg); pointer-events:none; }
+    html, body { height: 100%; }
 
-    .nowbar { height:36px; display:flex; align-items:center; gap:8px; padding:0 16px; background:var(--card-bg); border-bottom:1px solid var(--card-border); font-size:12px; color:var(--muted); white-space:nowrap; overflow-x:auto; scrollbar-width:none; }
-    .nowbar::-webkit-scrollbar { display:none; }
-    .nowbar .live-dot { width:7px; height:7px; border-radius:50%; background:#3ea86a; box-shadow:0 0 7px rgba(62,168,106,0.9); flex:none; animation:pulse 1.5s ease-in-out infinite; }
-    .nowbar.hidden { display:none; }
+    body {
+      font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      font-feature-settings: "tnum" 1;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      /* Surface glow bleeding from the top-right corner. */
+      background-image: radial-gradient(
+        circle at 92% -2%,
+        rgba(var(--accent-rgb), var(--glow-alpha)),
+        transparent 55%
+      );
+      background-attachment: fixed;
+    }
 
-    .content { width:100%; max-width:760px; margin:0 auto; padding:18px 16px calc(96px + env(safe-area-inset-bottom)); }
-    .tab { display:none; animation:fadein 0.2s ease; }
-    .tab.active { display:block; }
-    @keyframes fadein { from{opacity:0;} to{opacity:1;} }
-    .stack { display:flex; flex-direction:column; gap:16px; }
+    /* =========================================================
+       STICKY TOP BAR (48px) — wordmark + surface + theme toggle
+       ========================================================= */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--card-border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+    }
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.9);
+      flex: none;
+    }
+    /* The pulsing green dot that appears when a Grand Slam is live. */
+    .brand-live {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3ea86a;
+      box-shadow: 0 0 8px rgba(62, 168, 106, 0.9);
+      flex: none;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .icon-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 9px;
+      color: var(--text);
+      width: 34px;
+      height: 34px;
+      font-size: 15px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s ease, border-color 0.4s ease, background-color 0.4s ease;
+    }
+    .icon-btn:hover { border-color: var(--accent); transform: scale(1.05); }
+    .icon-btn:active { transform: scale(0.95); }
+    .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    .card { background:var(--card-bg); border:1px solid var(--card-border); border-radius:18px; padding:26px; box-shadow:var(--card-shadow); }
-    .label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:2.5px; color:var(--muted); }
-    .section-title { display:flex; align-items:baseline; gap:8px; font-size:17px; font-weight:700; margin-bottom:12px; }
-    .section-title .count { font-size:13px; font-weight:500; color:var(--muted); }
-    .link-btn { background:none; border:none; color:var(--accent); font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; padding:0; }
-    .btn { width:100%; padding:15px; border-radius:13px; font-family:inherit; font-size:15px; font-weight:700; letter-spacing:0.2px; cursor:pointer; transition:transform 0.15s ease,filter 0.2s ease,border-color 0.4s ease,box-shadow 0.4s ease; }
-    .btn:hover { transform:scale(1.02); }
-    .btn:active { transform:scale(0.98); }
-    .btn-primary { border:none; color:#0b0d0f; background:var(--accent); background-image:linear-gradient(135deg,color-mix(in srgb,var(--accent),#ffffff 22%),var(--accent)); box-shadow:0 8px 30px rgba(var(--accent-rgb),0.35); }
-    html[data-theme="light"] .btn-primary { color:#ffffff; }
-    .btn-primary:hover { filter:brightness(1.06); }
-    .btn-outline { background:var(--card-bg); border:1px solid var(--card-border); color:var(--text); }
-    .btn-outline:hover { border-color:var(--accent); }
+    .surface-pick { position: relative; }
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      background: var(--card-bg);
+      color: var(--text);
+      border: 1px solid var(--card-border);
+      border-radius: 9px;
+      padding: 8px 30px 8px 12px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      outline: none;
+    }
+    select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .surface-pick::after {
+      content: "";
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      width: 6px;
+      height: 6px;
+      border-right: 2px solid var(--muted);
+      border-bottom: 2px solid var(--muted);
+      transform: translateY(-65%) rotate(45deg);
+      pointer-events: none;
+    }
 
-    .hero { position:relative; text-align:center; padding:22px 10px 18px; min-height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; animation:hero-fadein 0.6s ease; }
-    @keyframes hero-fadein { from{opacity:0;transform:translateY(8px);} to{opacity:1;transform:translateY(0);} }
-    .hero::before { content:""; position:absolute; top:50%; left:50%; width:300px; height:300px; transform:translate(-50%,-55%); background:radial-gradient(circle,rgba(var(--accent-rgb),0.10),transparent 70%); pointer-events:none; }
-    .hero-brand { position:relative; display:inline-flex; align-items:center; gap:11px; font-size:28px; font-weight:700; letter-spacing:-1px; }
-    .hero-brand .brand-dot { width:12px; height:12px; }
-    .hero-tagline { position:relative; color:var(--text); font-size:18px; font-weight:700; margin-top:8px; }
-    .hero-subdesc { position:relative; color:var(--muted); font-size:13px; font-weight:400; margin-top:6px; max-width:320px; line-height:1.5; }
-    .hero-cta { position:relative; margin-top:14px; max-width:220px; width:100%; }
-    .hero-live { position:relative; margin-top:10px; font-size:13px; font-weight:600; color:var(--accent); display:inline-flex; align-items:center; gap:7px; }
-    .hero-live .live-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px rgba(var(--accent-rgb),0.9); animation:pulse 1.5s ease-in-out infinite; }
+    /* =========================================================
+       PERSISTENT "NOW" BAR (36px, home + matches only)
+       ========================================================= */
+    .nowbar {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--card-border);
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .nowbar::-webkit-scrollbar { display: none; }
+    .nowbar .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #3ea86a; box-shadow: 0 0 7px rgba(62,168,106,0.9);
+      flex: none; animation: pulse 1.5s ease-in-out infinite;
+    }
+    .nowbar.hidden { display: none; }
 
-    .featured { cursor:pointer; border-top:1px solid rgba(var(--accent-rgb),0.20); box-shadow:0 4px 24px rgba(0,0,0,0.40); transition:transform 0.2s ease,box-shadow 0.2s ease; }
-    html[data-theme="light"] .featured { box-shadow:var(--card-shadow); }
-    .featured:hover { transform:translateY(-2px); box-shadow:0 10px 34px rgba(0,0,0,0.5); }
-    .feat-tournament { color:var(--accent); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1.5px; }
-    .feat-row { display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:12px; }
-    .feat-name { font-size:20px; font-weight:700; }
-    .feat-name.dim { color:var(--muted); }
-    .feat-scores { display:flex; gap:10px; font-size:16px; font-weight:600; }
-    .feat-scores span { min-width:16px; text-align:center; }
-    .feat-foot { display:flex; justify-content:flex-end; margin-top:16px; padding-top:14px; border-top:1px solid var(--card-border); }
+    /* =========================================================
+       LAYOUT: content column + bottom-nav clearance
+       ========================================================= */
+    .content {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 18px 16px calc(96px + env(safe-area-inset-bottom));
+    }
+    .tab { display: none; animation: fadein 0.2s ease; }
+    .tab.active { display: block; }
+    @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 
-    .gs-card { display:flex; flex-direction:column; gap:12px; }
-    .gs-top { display:flex; align-items:center; gap:12px; }
-    .gs-emoji { font-size:26px; flex:none; }
-    .gs-info { flex:1; min-width:0; }
-    .gs-name { font-size:15px; font-weight:700; }
-    .gs-date { font-size:12px; color:var(--muted); margin-top:2px; }
-    .gs-count { font-size:16px; font-weight:700; text-align:right; }
-    .gs-count.live { color:var(--accent); text-shadow:0 0 16px rgba(var(--accent-rgb),0.5); }
-    .gs-progress { height:4px; border-radius:999px; background:var(--track); overflow:hidden; }
-    .gs-progress-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,rgba(var(--accent-rgb),0.5),var(--accent)); transition:width 0.6s ease; }
+    .stack { display: flex; flex-direction: column; gap: 16px; }
 
-    .pills { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
-    .pills::-webkit-scrollbar { display:none; }
-    .pill { flex:none; padding:7px 14px; border-radius:999px; background:var(--card-bg); border:1px solid var(--card-border); color:var(--muted); font-family:inherit; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:transform 0.15s ease,background-color 0.25s ease; }
-    .pill:hover { transform:scale(1.04); }
-    .pill.active { background:var(--accent); color:#0b0d0f; border-color:var(--accent); }
-    html[data-theme="light"] .pill.active { color:#ffffff; }
+    /* =========================================================
+       SHARED PIECES
+       ========================================================= */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 26px;
+      box-shadow: var(--card-shadow);
+    }
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2.5px;
+      color: var(--muted);
+    }
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 17px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .section-title .count { font-size: 13px; font-weight: 500; color: var(--muted); }
 
-    .countdown-badge { display:inline-flex; align-items:center; gap:8px; padding:7px 14px; border-radius:999px; background:rgba(var(--accent-rgb),0.12); border:1px solid rgba(var(--accent-rgb),0.35); color:var(--accent); font-size:13px; font-weight:700; margin:12px 0; }
-    .countdown-badge .pulse-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px rgba(var(--accent-rgb),0.9); flex:none; animation:pulse 1.5s ease-in-out infinite; }
-    .hscroll { display:flex; gap:12px; overflow-x:auto; padding:4px 2px 10px; scroll-behavior:smooth; scrollbar-width:thin; }
-    .hscroll::-webkit-scrollbar { height:6px; }
-    .hscroll::-webkit-scrollbar-thumb { background:var(--card-border); border-radius:999px; }
-    .hcard { flex:none; width:160px; background:var(--card-bg); border:1px solid var(--card-border); border-radius:14px; padding:14px; cursor:pointer; display:flex; flex-direction:column; gap:6px; box-shadow:var(--card-shadow); transition:transform 0.2s ease; }
-    .hcard:hover { transform:translateY(-2px); border-color:rgba(var(--accent-rgb),0.4); }
-    .hcard-top { display:flex; align-items:center; gap:6px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; color:var(--muted); }
-    .hcard-players { font-size:14px; font-weight:700; line-height:1.3; min-height:36px; }
-    .hcard-time { font-size:12px; color:var(--accent); font-weight:600; margin-top:auto; }
-    .dot { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }
-    .dot-slam { background:var(--gold); box-shadow:0 0 7px rgba(240,192,64,0.7); }
-    .dot-masters { background:var(--accent); }
-    .dot-500 { background:rgba(var(--accent-rgb),0.6); }
-    .dot-soon { background:#3ea86a; box-shadow:0 0 7px rgba(62,168,106,0.85); }
-    .scroll-note { font-size:11px; font-weight:500; color:var(--muted); margin-top:6px; }
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0;
+    }
+    .link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    .how-grid { display:grid; grid-template-columns:1fr; gap:12px; }
-    @media(min-width:560px){.how-grid{grid-template-columns:repeat(3,1fr);}}
-    .how-card { background:var(--card-bg); border:1px solid var(--card-border); border-radius:14px; padding:16px; }
-    .how-emoji { font-size:22px; }
-    .how-title { font-size:14px; font-weight:700; margin-top:8px; }
-    .how-desc { font-size:12px; color:var(--muted); margin-top:4px; }
+    /* Primary + outlined buttons */
+    .btn {
+      width: 100%;
+      padding: 15px;
+      border-radius: 13px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+      transition: transform 0.15s ease, filter 0.2s ease,
+                  border-color 0.4s ease, box-shadow 0.4s ease, background-color 0.4s ease;
+    }
+    .btn:hover { transform: scale(1.02); }
+    .btn:active { transform: scale(0.98); }
+    .btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+    .btn-primary {
+      border: none;
+      color: #0b0d0f;
+      background: var(--accent);
+      background-image: linear-gradient(135deg,
+                        color-mix(in srgb, var(--accent), #ffffff 22%), var(--accent));
+      box-shadow: 0 8px 30px rgba(var(--accent-rgb), 0.35);
+    }
+    html[data-theme="light"] .btn-primary { color: #ffffff; }
+    .btn-primary:hover { filter: brightness(1.06); }
+    .btn-outline {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+    }
+    .btn-outline:hover { border-color: var(--accent); }
 
-    .example-card { display:flex; flex-direction:column; gap:14px; }
-    .example-tournament { color:var(--accent); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1.5px; }
-    .example-match { font-size:17px; font-weight:700; }
-    .example-scoreline { font-size:13px; color:var(--muted); }
-    .example-wp { display:flex; flex-direction:column; gap:8px; }
-    .example-wp-row { display:flex; justify-content:space-between; font-size:13px; font-weight:600; }
-    .example-wp-row .lead { color:var(--accent); }
-    .example-wp-row .dim { color:var(--muted); }
-    .example-momentum { position:relative; height:14px; border-radius:999px; background:var(--track); overflow:hidden; }
-    .example-momentum-fill { position:absolute; left:0; top:0; bottom:0; border-radius:999px; background:linear-gradient(90deg,rgba(var(--accent-rgb),0.55),var(--accent)); box-shadow:0 0 18px rgba(var(--accent-rgb),0.35); }
-    .example-momentum-center { position:absolute; left:50%; top:0; bottom:0; width:2px; transform:translateX(-1px); background:rgba(255,255,255,0.35); }
-    html[data-theme="light"] .example-momentum-center { background:rgba(0,0,0,0.30); }
-    .example-caption { font-size:13px; color:var(--muted); }
-    .example-foot { display:flex; justify-content:flex-end; padding-top:12px; border-top:1px solid var(--card-border); }
+    /* =========================================================
+       HOME — HERO
+       ========================================================= */
+    .hero {
+      position: relative;
+      text-align: center;
+      padding: 22px 10px 18px;
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      animation: hero-fadein 0.6s ease;
+    }
+    @keyframes hero-fadein {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 300px; height: 300px;
+      transform: translate(-50%, -55%);
+      background: radial-gradient(circle, rgba(var(--accent-rgb), 0.10), transparent 70%);
+      pointer-events: none;
+    }
+    .hero-brand {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -1px;
+    }
+    .hero-brand .brand-dot { width: 12px; height: 12px; }
+    .hero-tagline {
+      position: relative;
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 8px;
+    }
+    .hero-subdesc {
+      position: relative;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 400;
+      margin-top: 6px;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+    .hero-cta {
+      position: relative;
+      margin-top: 14px;
+      max-width: 220px;
+      width: 100%;
+    }
+    .hero-live {
+      position: relative;
+      margin-top: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .hero-live .live-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb),0.9);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
 
-    .subtabs { display:flex; gap:8px; margin-bottom:14px; }
-    .subtab { flex:1; padding:10px; border-radius:11px; background:var(--card-bg); border:1px solid var(--card-border); color:var(--muted); font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; transition:transform 0.15s ease; }
-    .subtab.active { color:var(--text); border-color:var(--accent); background:rgba(var(--accent-rgb),0.08); }
-    .mlist { display:flex; flex-direction:column; }
-    .mcard { display:flex; align-items:center; gap:12px; padding:14px 14px; border-radius:12px; border:1px solid transparent; cursor:pointer; transition:transform 0.2s ease; }
-    .mcard:nth-child(even) { background:var(--card-bg-alt); }
-    .mcard:nth-child(odd) { background:var(--card-bg); }
-    .mcard:hover { transform:translateY(-2px); border-color:rgba(var(--accent-rgb),0.4); }
-    .mcard-tag { flex:none; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; padding:4px 8px; border-radius:7px; background:rgba(var(--accent-rgb),0.12); color:var(--accent); white-space:nowrap; }
-    .mcard-body { flex:1; min-width:0; }
-    .mcard-players { font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .mcard-sub { font-size:12px; color:var(--muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .mcard-time { flex:none; text-align:right; font-size:13px; font-weight:600; color:var(--accent); }
-    .mcard-time .no-time { color:var(--muted); font-weight:500; }
+    /* =========================================================
+       HOME — FEATURED MATCH CARD (clickable)
+       ========================================================= */
+    .featured {
+      cursor: pointer;
+      border-top: 1px solid rgba(var(--accent-rgb), 0.20);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.40);
+      transition: transform 0.2s ease, box-shadow 0.2s ease,
+                  background-color 0.4s ease, border-color 0.4s ease;
+    }
+    html[data-theme="light"] .featured { box-shadow: var(--card-shadow); }
+    .featured:hover { transform: translateY(-2px); box-shadow: 0 10px 34px rgba(0,0,0,0.5); }
+    html[data-theme="light"] .featured:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
+    .featured:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .feat-tournament {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+    }
+    .feat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 14px;
+      gap: 12px;
+    }
+    .feat-name { font-size: 20px; font-weight: 700; }
+    .feat-name.dim { color: var(--muted); }
+    .feat-scores { display: flex; gap: 10px; font-size: 16px; font-weight: 600; }
+    .feat-scores span { min-width: 16px; text-align: center; }
+    .feat-foot {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--card-border);
+    }
 
-    .ptr { height:0; overflow:hidden; text-align:center; color:var(--muted); font-size:12px; transition:height 0.3s ease; }
-    .ptr.active { height:34px; }
-    .ptr .spin { display:inline-block; width:14px; height:14px; border:2px solid rgba(var(--accent-rgb),0.3); border-top-color:var(--accent); border-radius:50%; animation:spin 0.7s linear infinite; vertical-align:middle; margin-right:7px; }
+    /* =========================================================
+       HOME — GRAND SLAM COUNTDOWN CARD
+       ========================================================= */
+    .gs-card { display: flex; flex-direction: column; gap: 12px; }
+    .gs-top { display: flex; align-items: center; gap: 12px; }
+    .gs-emoji { font-size: 26px; flex: none; }
+    .gs-info { flex: 1; min-width: 0; }
+    .gs-name { font-size: 15px; font-weight: 700; }
+    .gs-date { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .gs-count { font-size: 16px; font-weight: 700; text-align: right; }
+    .gs-count.live { color: var(--accent); text-shadow: 0 0 16px rgba(var(--accent-rgb),0.5); }
+    .gs-progress { height: 4px; border-radius: 999px; background: var(--track); overflow: hidden; }
+    .gs-progress-fill {
+      height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.5), var(--accent));
+      transition: width 0.6s ease;
+    }
 
-    .back-link { margin-bottom:12px; }
-    .status-pill { display:inline-flex; align-items:center; gap:7px; padding:4px 12px; border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); font-size:12px; font-weight:600; color:var(--muted); }
-    html[data-theme="light"] .status-pill { background:rgba(0,0,0,0.04); }
-    .status-pill .live-dot { width:8px; height:8px; border-radius:50%; background:#3ea86a; box-shadow:0 0 8px rgba(62,168,106,0.9); animation:pulse 1.5s ease-in-out infinite; }
-    .an-head { text-align:center; }
-    .an-tournament { color:var(--accent); font-size:13px; font-weight:700; letter-spacing:1px; text-transform:uppercase; margin-top:12px; }
-    .an-match { font-size:22px; font-weight:700; margin-top:8px; }
-    .an-scoreline { font-size:14px; color:var(--muted); margin-top:6px; }
+    /* =========================================================
+       FILTER PILLS (home + matches)
+       ========================================================= */
+    .pills {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scrollbar-width: none;
+    }
+    .pills::-webkit-scrollbar { display: none; }
+    .pill {
+      flex: none;
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: transform 0.15s ease, background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+    }
+    .pill:hover { transform: scale(1.04); }
+    .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .pill.active {
+      background: var(--accent);
+      color: #0b0d0f;
+      border-color: var(--accent);
+    }
+    html[data-theme="light"] .pill.active { color: #ffffff; }
 
-    .wp-card { padding:22px; }
-    @media(min-width:480px){.wp-card{padding:28px;}}
-    .wp-head { display:flex; align-items:center; gap:8px; position:relative; }
-    .help-btn { width:18px; height:18px; border-radius:50%; border:1px solid var(--card-border); background:var(--card-bg); color:var(--muted); font-size:11px; font-weight:700; cursor:pointer; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
-    .tooltip { position:absolute; top:26px; left:0; z-index:20; max-width:280px; background:var(--card-bg-alt); border:1px solid var(--card-border); border-radius:12px; padding:12px 14px; font-size:12px; line-height:1.5; color:var(--text); box-shadow:var(--card-shadow); display:none; }
-    .tooltip.show { display:block; }
-    .wp-row { display:flex; justify-content:space-between; align-items:flex-end; gap:12px; margin-top:16px; }
-    .wp-side { flex:1; min-width:0; }
-    .wp-side.right { text-align:right; }
-    .wp-name { font-size:16px; font-weight:600; color:var(--muted); }
-    .wp-pct { font-size:64px; font-weight:700; letter-spacing:-2px; line-height:1; margin-top:6px; }
-    .wp-pct.lead { color:var(--accent); background:linear-gradient(135deg,color-mix(in srgb,var(--accent),#ffffff 30%),var(--accent)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; text-shadow:0 0 26px rgba(var(--accent-rgb),0.45); }
-    .momentum { position:relative; height:20px; border-radius:999px; background:var(--track); margin-top:20px; overflow:hidden; }
-    .momentum-fill { position:absolute; left:0; top:0; bottom:0; border-radius:999px; background:linear-gradient(90deg,rgba(var(--accent-rgb),0.55),var(--accent)); box-shadow:0 0 22px rgba(var(--accent-rgb),0.4); transition:width 0.5s cubic-bezier(0.4,0,0.2,1); }
-    .momentum-center { position:absolute; left:50%; top:0; bottom:0; width:2px; transform:translateX(-1px); background:rgba(255,255,255,0.35); }
-    html[data-theme="light"] .momentum-center { background:rgba(0,0,0,0.30); }
-    .wp-foot { display:flex; justify-content:space-between; margin-top:10px; font-size:12px; color:var(--muted); }
+    /* =========================================================
+       HOME — TODAY'S MATCHES (horizontal scroll cards)
+       ========================================================= */
+    .countdown-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: rgba(var(--accent-rgb), 0.12);
+      border: 1px solid rgba(var(--accent-rgb), 0.35);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      margin: 12px 0;
+    }
+    .countdown-badge .pulse-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb),0.9);
+      flex: none; animation: pulse 1.5s ease-in-out infinite;
+    }
+    .hscroll {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding: 4px 2px 10px;
+      scroll-behavior: smooth;
+      scrollbar-width: thin;
+    }
+    .hscroll::-webkit-scrollbar { height: 6px; }
+    .hscroll::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 999px; }
+    .hcard {
+      flex: none;
+      width: 160px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 14px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      box-shadow: var(--card-shadow);
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.4s ease, background-color 0.4s ease;
+    }
+    .hcard:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb),0.4); }
+    .hcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .hcard-top { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700;
+                 text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
+    .hcard-tour { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hcard-players { font-size: 14px; font-weight: 700; line-height: 1.3; min-height: 36px; }
+    .hcard-time { font-size: 12px; color: var(--accent); font-weight: 600; margin-top: auto; }
 
-    .pressure-item { margin-top:18px; }
-    .pressure-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
-    .pressure-name { font-size:15px; font-weight:600; }
-    .pressure-status { font-size:13px; color:var(--muted); display:inline-flex; align-items:center; gap:7px; }
-    .pdot { width:9px; height:9px; border-radius:50%; flex:none; }
-    .pdot.calm { background:var(--muted); }
-    .pdot.building { background:rgba(var(--accent-rgb),0.5); }
-    .pdot.high { background:var(--accent); box-shadow:0 0 8px rgba(var(--accent-rgb),0.6); }
-    .pbar { height:14px; border-radius:999px; background:var(--track); overflow:hidden; }
-    .pbar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,rgba(var(--accent-rgb),0.55),var(--accent)); width:0; transition:width 0.5s cubic-bezier(0.4,0,0.2,1); }
+    /* importance dots */
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+    .dot-slam   { background: var(--gold); box-shadow: 0 0 7px rgba(240,192,64,0.7); }
+    .dot-masters{ background: var(--accent); }
+    .dot-500    { background: rgba(var(--accent-rgb), 0.6); }
+    .dot-soon   { background: #3ea86a; box-shadow: 0 0 7px rgba(62,168,106,0.85); }
 
-    .serve-item { margin-top:20px; }
-    .serve-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
-    .serve-name { font-size:15px; font-weight:600; }
-    .serve-dir { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:1px; display:inline-flex; align-items:center; gap:5px; }
-    .serve-dir.up { color:var(--accent); }
-    .serve-dir.down { color:var(--red); }
-    .serve-dir.steady { color:var(--muted); }
-    .serve-chart { width:100%; height:auto; display:block; }
+    .scroll-note { font-size: 11px; font-weight: 500; color: var(--muted); margin-top: 6px; }
 
-    .card-msg { text-align:center; color:var(--muted); font-size:13px; padding:18px 6px; }
+    /* =========================================================
+       HOME — HOW IT WORKS (3 small cards)
+       ========================================================= */
+    .how-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 560px) { .how-grid { grid-template-columns: repeat(3, 1fr); } }
+    .how-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    .how-emoji { font-size: 22px; }
+    .how-title { font-size: 14px; font-weight: 700; margin-top: 8px; }
+    .how-desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
-    .share-preview { display:flex; justify-content:center; padding:8px 0 4px; }
-    .share-preview canvas { width:300px; height:auto; border-radius:14px; border:1px solid var(--card-border); box-shadow:var(--card-shadow); }
-    .share-actions { display:flex; flex-direction:column; gap:12px; margin-top:8px; }
-    .share-note { font-size:11px; font-weight:500; color:var(--muted); text-align:center; margin-top:4px; }
+    /* =========================================================
+       HOME — EXAMPLE MATCH BREAKDOWN
+       ========================================================= */
+    .example-card { display: flex; flex-direction: column; gap: 14px; }
+    .example-top { display: flex; flex-direction: column; gap: 4px; }
+    .example-tournament {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+    }
+    .example-match { font-size: 17px; font-weight: 700; }
+    .example-scoreline { font-size: 13px; color: var(--muted); }
+    .example-wp { display: flex; flex-direction: column; gap: 8px; }
+    .example-wp-row { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; }
+    .example-wp-row .lead { color: var(--accent); }
+    .example-wp-row .dim { color: var(--muted); }
+    .example-momentum {
+      position: relative; height: 14px; border-radius: 999px;
+      background: var(--track); overflow: hidden;
+    }
+    .example-momentum-fill {
+      position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.55), var(--accent));
+      box-shadow: 0 0 18px rgba(var(--accent-rgb),0.35);
+    }
+    .example-momentum-center {
+      position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
+      transform: translateX(-1px); background: rgba(255,255,255,0.35);
+    }
+    html[data-theme="light"] .example-momentum-center { background: rgba(0,0,0,0.30); }
+    .example-caption { font-size: 13px; color: var(--muted); }
+    .example-foot {
+      display: flex;
+      justify-content: flex-end;
+      padding-top: 12px;
+      border-top: 1px solid var(--card-border);
+    }
 
-    .empty { text-align:center; padding:32px 12px; }
-    .empty-ball { font-size:48px; line-height:1; display:inline-block; filter:drop-shadow(0 0 26px rgba(var(--accent-rgb),0.5)); animation:floaty 3s ease-in-out infinite; }
-    .empty-title { font-size:16px; font-weight:700; margin-top:14px; }
-    .empty-sub { font-size:13px; color:var(--muted); margin-top:6px; }
-    .empty .btn { max-width:220px; margin:16px auto 0; }
+    /* =========================================================
+       MATCHES TAB — sub-tabs + vertical list
+       ========================================================= */
+    .subtabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .subtab {
+      flex: 1;
+      padding: 10px;
+      border-radius: 11px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, color 0.25s ease, border-color 0.25s ease, background-color 0.25s ease;
+    }
+    .subtab.active { color: var(--text); border-color: var(--accent); background: rgba(var(--accent-rgb),0.08); }
+    .subtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    .skeleton { position:relative; overflow:hidden; background:rgba(255,255,255,0.05); border-radius:10px; }
-    html[data-theme="light"] .skeleton { background:rgba(0,0,0,0.05); }
-    .skeleton::after { content:""; position:absolute; inset:0; transform:translateX(-100%); background:linear-gradient(110deg,transparent 20%,rgba(255,255,255,0.08) 50%,transparent 80%); animation:shimmer 1.8s infinite; }
-    html[data-theme="light"] .skeleton::after { background:linear-gradient(110deg,transparent 20%,rgba(0,0,0,0.05) 50%,transparent 80%); }
-    .sk-line { height:14px; margin:10px 0; }
-    .sk-big { height:60px; margin:14px 0; }
-    .sk-bar { height:18px; border-radius:999px; margin:18px 0; }
-    .sk-hcard { flex:none; width:160px; height:120px; border-radius:14px; }
-    .sk-mcard { height:64px; border-radius:12px; margin-bottom:10px; }
-    .hidden { display:none !important; }
+    .mlist { display: flex; flex-direction: column; }
+    .mcard {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 14px;
+      border-radius: 12px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.3s ease;
+    }
+    .mcard:nth-child(even) { background: var(--card-bg-alt); }
+    .mcard:nth-child(odd)  { background: var(--card-bg); }
+    .mcard:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb),0.4); }
+    .mcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .mcard-tag {
+      flex: none;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      padding: 4px 8px;
+      border-radius: 7px;
+      background: rgba(var(--accent-rgb), 0.12);
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .mcard-body { flex: 1; min-width: 0; }
+    .mcard-players { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mcard-sub { font-size: 12px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mcard-time { flex: none; text-align: right; font-size: 13px; font-weight: 600; color: var(--accent); }
+    .mcard-time .no-time { color: var(--muted); font-weight: 500; }
 
-    .toast { position:fixed; top:56px; left:50%; transform:translateX(-50%) translateY(-12px); z-index:100; max-width:90%; background:var(--card-bg-alt); border:1px solid var(--card-border); border-left:3px solid var(--red); border-radius:10px; padding:11px 16px; font-size:13px; color:var(--text); box-shadow:var(--card-shadow); opacity:0; pointer-events:none; transition:opacity 0.3s ease,transform 0.3s ease; }
-    .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+    /* pull-to-refresh visual */
+    .ptr {
+      height: 0;
+      overflow: hidden;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      transition: height 0.3s ease;
+    }
+    .ptr.active { height: 34px; }
+    .ptr .spin {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(var(--accent-rgb),0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 7px;
+    }
 
-    .footer { text-align:center; color:var(--muted); font-size:11px; font-weight:500; padding:16px 0 24px; }
+    /* =========================================================
+       ANALYSIS TAB
+       ========================================================= */
+    .back-link { margin-bottom: 12px; }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--card-border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    html[data-theme="light"] .status-pill { background: rgba(0,0,0,0.04); }
+    .status-pill .live-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #3ea86a; box-shadow: 0 0 8px rgba(62,168,106,0.9);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .an-head { text-align: center; }
+    .an-tournament { color: var(--accent); font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-top: 12px; }
+    .an-match { font-size: 22px; font-weight: 700; margin-top: 8px; }
+    .an-scoreline { font-size: 14px; color: var(--muted); margin-top: 6px; }
 
-    .bottomnav { position:fixed; left:0; right:0; bottom:0; z-index:60; height:64px; padding-bottom:env(safe-area-inset-bottom); display:flex; background:var(--nav-bg); border-top:1px solid rgba(255,255,255,0.06); }
-    html[data-theme="light"] .bottomnav { border-top:1px solid rgba(0,0,0,0.08); }
-    .navbtn { flex:1; position:relative; background:none; border:none; cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; color:#7d8690; font-family:inherit; transition:color 0.25s ease; }
-    .navbtn .nav-icon { font-size:19px; line-height:1; }
-    .navbtn .nav-label { font-size:11px; font-weight:500; }
-    .navbtn.active { color:var(--accent); }
-    .navbtn.active::before { content:""; position:absolute; top:0; left:50%; transform:translateX(-50%); width:30px; height:2px; background:var(--accent); border-radius:0 0 3px 3px; }
+    /* Win probability */
+    .wp-card { padding: 22px; }
+    @media (min-width: 480px) { .wp-card { padding: 28px; } }
+    .wp-head { display: flex; align-items: center; gap: 8px; position: relative; }
+    .help-btn {
+      width: 18px; height: 18px; border-radius: 50%;
+      border: 1px solid var(--card-border);
+      background: var(--card-bg);
+      color: var(--muted);
+      font-size: 11px; font-weight: 700;
+      cursor: pointer; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .help-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .tooltip {
+      position: absolute;
+      top: 26px; left: 0;
+      z-index: 20;
+      max-width: 280px;
+      background: var(--card-bg-alt);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.5;
+      color: var(--text);
+      box-shadow: var(--card-shadow);
+      display: none;
+    }
+    .tooltip.show { display: block; }
+    .wp-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 16px; }
+    .wp-side { flex: 1; min-width: 0; }
+    .wp-side.right { text-align: right; }
+    .wp-name { font-size: 16px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wp-pct { font-size: 64px; font-weight: 700; letter-spacing: -2px; line-height: 1; margin-top: 6px; }
+    .wp-pct.lead {
+      color: var(--accent);
+      background: linear-gradient(135deg, color-mix(in srgb, var(--accent), #ffffff 30%), var(--accent));
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+      text-shadow: 0 0 26px rgba(var(--accent-rgb), 0.45);
+    }
+    .momentum {
+      position: relative; height: 20px; border-radius: 999px;
+      background: var(--track); margin-top: 20px; overflow: hidden;
+    }
+    .momentum-fill {
+      position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.55), var(--accent));
+      box-shadow: 0 0 22px rgba(var(--accent-rgb),0.4);
+      transition: width 0.5s cubic-bezier(0.4,0,0.2,1), background-color 0.4s ease, box-shadow 0.4s ease;
+    }
+    .momentum-center {
+      position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
+      transform: translateX(-1px); background: rgba(255,255,255,0.35);
+    }
+    html[data-theme="light"] .momentum-center { background: rgba(0,0,0,0.30); }
+    .wp-foot { display: flex; justify-content: space-between; margin-top: 10px; font-size: 12px; color: var(--muted); }
 
-    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
-    @keyframes spin { to{transform:rotate(360deg);} }
-    @keyframes shimmer { to{transform:translateX(100%);} }
-    @keyframes floaty { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-6px);} }
-    @media(min-width:480px){.wp-pct{font-size:76px;}.wp-name{font-size:18px;}.feat-name{font-size:24px;}.an-match{font-size:26px;}}
-    @media(min-width:640px){.hero{min-height:160px;}}
-    @media(prefers-reduced-motion:reduce){*{animation-duration:0s!important;transition-duration:0s!important;}}
+    /* Pressure */
+    .pressure-item { margin-top: 18px; }
+    .pressure-item:first-of-type { margin-top: 16px; }
+    .pressure-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+    .pressure-name { font-size: 15px; font-weight: 600; }
+    .pressure-status { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
+    .pressure-status b { color: var(--text); font-weight: 600; }
+    .pdot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .pdot.calm { background: var(--muted); }
+    .pdot.building { background: rgba(var(--accent-rgb), 0.5); }
+    .pdot.high { background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb),0.6); }
+    .pbar { height: 14px; border-radius: 999px; background: var(--track); overflow: hidden; }
+    .pbar-fill {
+      height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.55), var(--accent));
+      width: 0;
+      transition: width 0.5s cubic-bezier(0.4,0,0.2,1), background-color 0.4s ease;
+    }
+
+    /* Serve */
+    .serve-item { margin-top: 20px; }
+    .serve-item:first-of-type { margin-top: 16px; }
+    .serve-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+    .serve-name { font-size: 15px; font-weight: 600; }
+    .serve-dir { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; display: inline-flex; align-items: center; gap: 5px; }
+    .serve-dir.up { color: var(--accent); }
+    .serve-dir.down { color: var(--red); }
+    .serve-dir.steady { color: var(--muted); }
+    .serve-chart { width: 100%; height: auto; display: block; }
+    .serve-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .serve-dot { fill: var(--accent); }
+    .serve-area { fill: rgba(var(--accent-rgb), 0.16); stroke: none; }
+
+    .card-msg { text-align: center; color: var(--muted); font-size: 13px; padding: 18px 6px; }
+    .card-msg b { color: var(--text); display: block; margin-bottom: 4px; font-weight: 600; }
+
+    /* =========================================================
+       SHARE TAB
+       ========================================================= */
+    .share-preview {
+      display: flex;
+      justify-content: center;
+      padding: 8px 0 4px;
+    }
+    .share-preview canvas {
+      width: 300px;
+      height: auto;
+      border-radius: 14px;
+      border: 1px solid var(--card-border);
+      box-shadow: var(--card-shadow);
+    }
+    .share-actions { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+    .share-note { font-size: 11px; font-weight: 500; color: var(--muted); text-align: center; margin-top: 4px; }
+
+    /* =========================================================
+       EMPTY STATES
+       ========================================================= */
+    .empty {
+      text-align: center;
+      padding: 32px 12px;
+    }
+    .empty-ball {
+      font-size: 48px; line-height: 1; display: inline-block;
+      filter: drop-shadow(0 0 26px rgba(var(--accent-rgb), 0.5));
+      animation: floaty 3s ease-in-out infinite;
+    }
+    .empty-title { font-size: 16px; font-weight: 700; margin-top: 14px; }
+    .empty-sub { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .empty .btn { max-width: 220px; margin: 16px auto 0; }
+
+    /* =========================================================
+       SKELETONS (CSS-only shimmer)
+       ========================================================= */
+    .skeleton {
+      position: relative;
+      overflow: hidden;
+      background: rgba(255,255,255,0.05);
+      border-radius: 10px;
+    }
+    html[data-theme="light"] .skeleton { background: rgba(0,0,0,0.05); }
+    .skeleton::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(110deg, transparent 20%, rgba(255,255,255,0.08) 50%, transparent 80%);
+      animation: shimmer 1.8s infinite;
+    }
+    html[data-theme="light"] .skeleton::after {
+      background: linear-gradient(110deg, transparent 20%, rgba(0,0,0,0.05) 50%, transparent 80%);
+    }
+    .sk-line { height: 14px; margin: 10px 0; }
+    .sk-big  { height: 60px; margin: 14px 0; }
+    .sk-bar  { height: 18px; border-radius: 999px; margin: 18px 0; }
+    .sk-hcard { flex: none; width: 160px; height: 120px; border-radius: 14px; }
+    .sk-mcard { height: 64px; border-radius: 12px; margin-bottom: 10px; }
+    .hidden { display: none !important; }
+
+    /* =========================================================
+       TOAST (error notification)
+       ========================================================= */
+    .toast {
+      position: fixed;
+      top: 56px; left: 50%;
+      transform: translateX(-50%) translateY(-12px);
+      z-index: 100;
+      max-width: 90%;
+      background: var(--card-bg-alt);
+      border: 1px solid var(--card-border);
+      border-left: 3px solid var(--red);
+      border-radius: 10px;
+      padding: 11px 16px;
+      font-size: 13px;
+      color: var(--text);
+      box-shadow: var(--card-shadow);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* =========================================================
+       FOOTER
+       ========================================================= */
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 16px 0 24px;
+    }
+
+    /* =========================================================
+       BOTTOM NAV (fixed, 64px + safe area)
+       ========================================================= */
+    .bottomnav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 60;
+      height: 64px;
+      padding-bottom: env(safe-area-inset-bottom);
+      display: flex;
+      background: var(--nav-bg);
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    html[data-theme="light"] .bottomnav { border-top: 1px solid rgba(0,0,0,0.08); }
+    .navbtn {
+      flex: 1;
+      position: relative;
+      background: none;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      color: #7d8690;
+      font-family: inherit;
+      transition: color 0.25s ease;
+    }
+    .navbtn .nav-icon { font-size: 19px; line-height: 1; }
+    .navbtn .nav-label { font-size: 11px; font-weight: 500; }
+    .navbtn.active { color: var(--accent); }
+    .navbtn.active::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 30px; height: 2px;
+      background: var(--accent);
+      border-radius: 0 0 3px 3px;
+    }
+    .navbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+
+    /* =========================================================
+       KEYFRAMES + RESPONSIVE + REDUCED MOTION
+       ========================================================= */
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes shimmer { to { transform: translateX(100%); } }
+    @keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
+    @media (min-width: 480px) {
+      .wp-pct { font-size: 76px; }
+      .wp-name { font-size: 18px; }
+      .feat-name { font-size: 24px; }
+      .an-match { font-size: 26px; }
+    }
+    @media (min-width: 640px) {
+      .hero { min-height: 160px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation-duration: 0s !important; transition-duration: 0s !important; }
+    }
   </style>
 </head>
+
 <body>
+  <!-- Toast / error notification -->
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <!-- ===== STICKY TOP BAR ===== -->
   <header class="topbar">
     <div class="brand">
       <span class="brand-dot" aria-hidden="true"></span>
@@ -302,12 +964,6 @@
     </div>
     <div class="topbar-right">
       <button class="icon-btn" id="themeToggle" aria-label="Toggle dark or light mode">🌙</button>
-      <div class="surface-pick" id="sportPick">
-        <select id="sportSelect" aria-label="Select sport">
-          <option value="tennis">🎾 Tennis</option>
-          <option value="football">⚽ Football</option>
-        </select>
-      </div>
       <div class="surface-pick">
         <select id="surfaceSelect" aria-label="Select court surface">
           <option value="clay">Clay</option>
@@ -318,11 +974,13 @@
     </div>
   </header>
 
+  <!-- ===== PERSISTENT NOW BAR ===== -->
   <div class="nowbar" id="nowbar">
     <span id="nowDot" class="live-dot hidden" aria-hidden="true"></span>
     <span id="nowText">Loading the tour…</span>
   </div>
 
+  <!-- ===== CONTENT ===== -->
   <main class="content">
 
     <!-- ========== TAB 1: HOME ========== -->
@@ -335,8 +993,8 @@
             <span class="brand-dot" aria-hidden="true"></span>
             <span>Break</span>
           </div>
-          <div class="hero-tagline" id="heroTagline">Tennis momentum, decoded.</div>
-          <div class="hero-subdesc" id="heroSubdesc">Real-time win probability, pressure moments, and serve trends for every match.</div>
+          <div class="hero-tagline">Tennis momentum, decoded.</div>
+          <div class="hero-subdesc">Real-time win probability, pressure moments, and serve trends for every match.</div>
           <div class="hero-cta">
             <button class="btn btn-primary" id="heroBrowseBtn">Browse matches →</button>
           </div>
@@ -362,7 +1020,7 @@
           </div>
         </div>
 
-        <!-- Grand Slam countdown (tennis) / Next match countdown (football) -->
+        <!-- Grand Slam countdown -->
         <div class="card gs-card" id="gsCard">
           <div class="gs-top">
             <span class="gs-emoji" id="gsEmoji" aria-hidden="true">🎾</span>
@@ -382,7 +1040,7 @@
           <div id="todayCountdown"></div>
           <div class="hscroll" id="todayScroll"></div>
           <div id="todayEmpty" class="hidden"></div>
-          <div class="scroll-note" id="scrollNote">Times in venue local · Verify at flashscore.com</div>
+          <div class="scroll-note">Times in venue local · Verify at flashscore.com</div>
         </div>
 
         <!-- How it works -->
@@ -438,7 +1096,7 @@
 
     <!-- ========== TAB 2: MATCHES ========== -->
     <section id="tab-matches" class="tab" aria-label="Matches">
-      <div class="subtabs" id="matchesSubtabs">
+      <div class="subtabs">
         <button class="subtab active" id="subUpcoming" aria-label="Upcoming matches">Upcoming</button>
         <button class="subtab" id="subRecent" aria-label="Recent matches">Recent</button>
       </div>
@@ -521,201 +1179,1168 @@
       </div>
     </section>
 
-    <div class="footer">Data via RapidAPI / ESPN · Times in venue local · Built by Daniel Mann</div>
+    <!-- Footer (shows under whichever tab is active) -->
+<div class="footer">Data via RapidAPI · Times in venue local · Built by Daniel Mann</div>
   </main>
 
+  <!-- ===== BOTTOM NAV ===== -->
   <nav class="bottomnav" role="tablist" aria-label="Main navigation">
-    <button class="navbtn active" data-tab="home" aria-label="Home tab" aria-current="page"><span class="nav-icon">🏠</span><span class="nav-label">Home</span></button>
-    <button class="navbtn" data-tab="matches" aria-label="Matches tab"><span class="nav-icon">🎾</span><span class="nav-label">Matches</span></button>
-    <button class="navbtn" data-tab="analysis" aria-label="Analysis tab"><span class="nav-icon">📊</span><span class="nav-label">Analysis</span></button>
-    <button class="navbtn" data-tab="share" aria-label="Share tab"><span class="nav-icon">📤</span><span class="nav-label">Share</span></button>
+    <button class="navbtn active" data-tab="home" aria-label="Home tab" aria-current="page">
+      <span class="nav-icon" aria-hidden="true">🏠</span><span class="nav-label">Home</span>
+    </button>
+    <button class="navbtn" data-tab="matches" aria-label="Matches tab">
+      <span class="nav-icon" aria-hidden="true">🎾</span><span class="nav-label">Matches</span>
+    </button>
+    <button class="navbtn" data-tab="analysis" aria-label="Analysis tab">
+      <span class="nav-icon" aria-hidden="true">📊</span><span class="nav-label">Analysis</span>
+    </button>
+    <button class="navbtn" data-tab="share" aria-label="Share tab">
+      <span class="nav-icon" aria-hidden="true">📤</span><span class="nav-label">Share</span>
+    </button>
   </nav>
 
+  <!-- Hidden canvas for the share card. -->
   <canvas id="shareCanvas" width="1080" height="1350" style="display:none;"></canvas>
 
   <script>
-  // ============================================================
-  //  GLOBAL STATE
-  // ============================================================
-  const THEME_KEY = "break_theme", SURFACE_KEY = "break_surface", SPORT_KEY = "break_sport";
-  const nowDate = new Date();
-  const wcStart = new Date("2026-06-11T00:00:00Z"), wcEnd = new Date("2026-07-20T00:00:00Z");
-  let currentSport = localStorage.getItem(SPORT_KEY);
-  if (!currentSport) currentSport = (nowDate >= wcStart && nowDate < wcEnd) ? "football" : "tennis";
-  // ═══════════════════════════════════════════════════════════
-  //  TENNIS DATA & MATH (preserved fully)
-  // ═══════════════════════════════════════════════════════════
-  const FALLBACK_DATA = { fetched_at_utc:"2026-06-13T00:00:00.000Z", data_source:"completed", match_count:1, matches:[
-    { tournament:"Roland-Garros · Final", match_name:"Jannik Sinner vs Carlos Alcaraz", status:"Completed · 5 sets", isLive:false, detailed:true,
-      players:[ { name:"Jannik Sinner", set_scores:[6,3,6,6,6], firstServePct:68, aces:14, doubleFaults:2, bpFaced:8, bpSaved:6, serveTrend:[71,68,65,63,70] },
-                { name:"Carlos Alcaraz", set_scores:[3,6,7,4,4], firstServePct:62, aces:9, doubleFaults:5, bpFaced:11, bpSaved:5, serveTrend:[64,62,60,58,55] } ],
-      deep_stats:{ stats_available:true, serve_stats:{first_serve_percentage:65, aces:23, double_faults:7}, break_point_stats:{break_points_faced:19, break_points_saved:11} }
-    }
-  ]};
-  let CURRENT_TENNIS = FALLBACK_DATA.matches[0];
-  const TENNIS_SLAMS=[ {name:"Roland-Garros",emoji:"🎾",surface:"clay",start:"2026-05-24",end:"2026-06-07"},
-    {name:"Wimbledon",emoji:"🌱",surface:"grass",start:"2026-06-29",end:"2026-07-12"},
-    {name:"US Open",emoji:"🏟️",surface:"hard",start:"2026-08-24",end:"2026-09-13"},
-    {name:"Australian Open",emoji:"🏟️",surface:"hard",start:"2027-01-18",end:"2027-02-01"},
-    {name:"Roland-Garros",emoji:"🎾",surface:"clay",start:"2027-05-23",end:"2027-06-06"} ];
-  function parseYMD(s){const p=s.split("-");return new Date(+p[0],+p[1]-1,+p[2]);}
-  function fmtDate(d){return d.toLocaleDateString([],{month:"long",day:"numeric",year:"numeric"});}
-  function nextSlamInfo(){
-    const now=new Date();
-    for(let i=0;i<TENNIS_SLAMS.length;i++){const s=TENNIS_SLAMS[i],st=parseYMD(s.start),en=parseYMD(s.end);en.setHours(23,59,59);if(now>=st&&now<=en) return {slam:s,isLive:true,daysUntil:0,progress:1};}
-    for(let i=0;i<TENNIS_SLAMS.length;i++){const s=TENNIS_SLAMS[i],st=parseYMD(s.start);if(st>now){const prevEnd=i>0?parseYMD(TENNIS_SLAMS[i-1].end):new Date(now.getTime()-86400000);const span=st.getTime()-prevEnd.getTime(),elapsed=now.getTime()-prevEnd.getTime();const progress=Math.max(0,Math.min(1,elapsed/span)),days=Math.ceil((st.getTime()-now.getTime())/86400000);return {slam:s,isLive:false,daysUntil:days,progress:progress};}}
-    return {slam:TENNIS_SLAMS[TENNIS_SLAMS.length-1],isLive:false,daysUntil:0,progress:1};
+  /* ===========================================================
+     STEP 0 — FALLBACK DATA (the Roland-Garros final)
+     Roland-Garros 2026 Final: Sinner def. Alcaraz 6-3 3-6 6-7 6-4 6-4.
+     =========================================================== */
+  const FALLBACK_DATA = {
+    "fetched_at_utc": "2026-06-13T00:00:00.000Z",
+    "data_source": "completed",
+    "match_count": 1,
+    "matches": [
+      {
+        "tournament": "Roland-Garros · Final",
+        "match_name": "Jannik Sinner vs Carlos Alcaraz",
+        "status": "Completed · 5 sets",
+        "isLive": false,
+        "detailed": true,
+        "players": [
+          {
+            "name": "Jannik Sinner",
+            "set_scores": [6, 3, 6, 6, 6],
+            "firstServePct": 68, "aces": 14, "doubleFaults": 2,
+            "bpFaced": 8, "bpSaved": 6, "serveTrend": [71, 68, 65, 63, 70]
+          },
+          {
+            "name": "Carlos Alcaraz",
+            "set_scores": [3, 6, 7, 4, 4],
+            "firstServePct": 62, "aces": 9, "doubleFaults": 5,
+            "bpFaced": 11, "bpSaved": 5, "serveTrend": [64, 62, 60, 58, 55]
+          }
+        ],
+        "deep_stats": {
+          "stats_available": true,
+          "serve_stats": { "first_serve_percentage": 65, "aces": 23, "double_faults": 7 },
+          "break_point_stats": { "break_points_faced": 19, "break_points_saved": 11 }
+        }
+      }
+    ]
+  };
+
+  // The match currently loaded into Analysis / Share.
+  let CURRENT = null;
+
+  /* ===========================================================
+     STEP 1 — THEME (dark/light) + SURFACE
+     =========================================================== */
+  const THEME_KEY = "break_theme";
+  const SURFACE_KEY = "break_surface";
+  const surfaceSelect = document.getElementById("surfaceSelect");
+  const themeToggle = document.getElementById("themeToggle");
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    themeToggle.textContent = theme === "light" ? "☀️" : "🌙";
+    localStorage.setItem(THEME_KEY, theme);
   }
-  function setsWon(me,opp){let c=0;for(let i=0;i<me.length;i++) if(me[i]>opp[i]) c++;return c;}
-  function totalGames(scores){return scores.reduce((s,g)=>s+g,0);}
-  function strengthScore(me,opp){let score=20;score+=setsWon(me.set_scores,opp.set_scores)*8;score+=totalGames(me.set_scores)*2;score+=me.firstServePct*0.3;score+=me.aces*1.5;score+=me.doubleFaults*-1.5;score+=me.bpSaved*2;const bpLost=me.bpFaced-me.bpSaved;score+=bpLost*-3;return score;}
-  function winProbabilities(p1,p2){const s1=strengthScore(p1,p2),s2=strengthScore(p2,p1),total=s1+s2;let pct1=total===0?50:(s1/total)*100;pct1=Math.max(5,Math.min(95,pct1));return {p1:Math.round(pct1),p2:Math.round(100-pct1)};}
-  function pressureScore(player,winPct){let score=0;score+=player.bpFaced*8;const bpUnsaved=player.bpFaced-player.bpSaved;score+=bpUnsaved*15;let trailing=(50-winPct)*0.8;trailing=Math.max(0,Math.min(40,trailing));score+=trailing;return Math.max(0,Math.min(100,Math.round(score)));}
-  function pressureLabel(score){if(score<=39)return"Calm";if(score<=69)return"Building";return"High";}
-  function pressureDotClass(score){if(score<=39)return"calm";if(score<=69)return"building";return"high";}
-  function serveDirection(trend){if(!trend||trend.length<2)return"Steady";const diff=trend[trend.length-1]-trend[0];if(diff>=4)return"Improving";if(diff<=-4)return"Dipping";return"Steady";}
-  function buildServeChart(trend){const W=300,H=80,PAD=12;if(!Array.isArray(trend)||trend.length<2) return `<svg class="serve-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line x1="${PAD}" y1="${H/2}" x2="${W-PAD}" y2="${H/2}" stroke="var(--track)" stroke-width="2" stroke-dasharray="4 5"/><text x="${W/2}" y="${H/2+22}" fill="var(--muted)" font-size="11" text-anchor="middle">No serve-trend data</text></svg>`;const min=Math.min(...trend),max=Math.max(...trend),range=max-min||1;const points=trend.map((v,i)=>({x:PAD+i/(trend.length-1)*(W-2*PAD),y:H-PAD-((v-min)/range)*(H-2*PAD)}));let line="M "+points[0].x.toFixed(1)+" "+points[0].y.toFixed(1);for(let i=1;i<points.length;i++) line+=" L "+points[i].x.toFixed(1)+" "+points[i].y.toFixed(1);let area=line+" L "+points[points.length-1].x.toFixed(1)+" "+(H-PAD)+" L "+points[0].x.toFixed(1)+" "+(H-PAD)+" Z";let dots="";points.forEach(p=>dots+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.5" fill="var(--accent)"/>`);return `<svg class="serve-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path d="${area}" fill="rgba(var(--accent-rgb),0.16)"/><path d="${line}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>${dots}</svg>`;}
-  function classifyTournament(name){const t=(name||"").toLowerCase();function h(){for(let i=0;i<arguments.length;i++) if(t.indexOf(arguments[i])!==-1) return true;return false;} if(h("wimbledon","roland garros","roland-garros","us open","australian open")) return {tier:1,badge:"slam"}; if(h("masters","indian wells","miami open","monte-carlo","monte carlo","madrid","rome","canada","cincinnati","shanghai","paris")) return {tier:2,badge:"masters"}; if(h("500","barcelona","queen","halle","tokyo","beijing","vienna","basel","rio")) return {tier:3,badge:"t500"}; if(h("250","stuttgart","hertogenbosch","nottingham","rosmalen","eastbourne","mallorca","s-hertogenbosch")) return {tier:4,badge:""}; if(h("challenger")) return {tier:5,badge:""}; if(h("itf","m15","m25","w15","w25")) return {tier:6,badge:""}; return {tier:7,badge:""};}
-  function roundRank(r){const t=(r||"").toLowerCase();if(t.indexOf("semi")!==-1)return 1;if(t.indexOf("quarter")!==-1)return 2;if(t.indexOf("final")!==-1)return 0;if(t.indexOf("round")!==-1)return 3;return 4;}
-  function surfaceEmoji(name){const t=(name||"").toLowerCase();if(/wimbledon|halle|queen|nottingham|hertogenbosch|rosmalen|stuttgart|eastbourne|mallorca|grass/.test(t))return"🌱";if(/roland|french|clay|monte|madrid|rome|barcelona|hamburg|kitzbuhel|gstaad|bastad|umag/.test(t))return"🎾";if(/open|hard|cincinnati|indian wells|miami|shanghai|beijing|tokyo|australian|us open|canada|dubai|acapulco/.test(t))return"🏟️";return"🎾";}
-  function badgeDotHtml(badge){if(badge==="slam")return'<span class="dot dot-slam"></span>';if(badge==="masters")return'<span class="dot dot-masters"></span>';if(badge==="t500")return'<span class="dot dot-500"></span>';return"";}
-  function sortMatches(list){return list.slice().sort((a,b)=>{if(a.tier!==b.tier)return a.tier-b.tier;if(a.roundRank!==b.roundRank)return a.roundRank-b.roundRank;const ta=a.startLocal?a.startLocal.getTime():Infinity,tb=b.startLocal?b.startLocal.getTime():Infinity;return ta-tb;});}
-  // ─── Tennis API ──────────────────────────────────────────
+  function applySurface(surface) {
+    document.documentElement.setAttribute("data-surface", surface);
+    surfaceSelect.value = surface;
+    localStorage.setItem(SURFACE_KEY, surface);
+  }
+
+  applyTheme(localStorage.getItem(THEME_KEY) || "dark");
+  applySurface(localStorage.getItem(SURFACE_KEY) || "clay");
+
+  themeToggle.addEventListener("click", function () {
+    const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+    applyTheme(next);
+    if (activeTab === "share") drawSharePreview(); // re-tint the preview
+  });
+  surfaceSelect.addEventListener("change", function () {
+    applySurface(surfaceSelect.value);
+    if (activeTab === "share") drawSharePreview();
+  });
+
+  /* ===========================================================
+     STEP 2 — THE MATH (preserved exactly, just reused)
+     =========================================================== */
+  function setsWon(meScores, oppScores) {
+    let count = 0;
+    for (let i = 0; i < meScores.length; i++) if (meScores[i] > oppScores[i]) count++;
+    return count;
+  }
+  function totalGames(scores) {
+    return scores.reduce(function (sum, g) { return sum + g; }, 0);
+  }
+  function strengthScore(me, opp) {
+    let score = 20;
+    score += setsWon(me.set_scores, opp.set_scores) * 8;
+    score += totalGames(me.set_scores) * 2;
+    score += me.firstServePct * 0.3;
+    score += me.aces * 1.5;
+    score += me.doubleFaults * -1.5;
+    score += me.bpSaved * 2;
+    const bpLost = me.bpFaced - me.bpSaved;
+    score += bpLost * -3;
+    return score;
+  }
+  function winProbabilities(p1, p2) {
+    const s1 = strengthScore(p1, p2);
+    const s2 = strengthScore(p2, p1);
+    const total = s1 + s2;
+    let pct1 = total === 0 ? 50 : (s1 / total) * 100;
+    pct1 = Math.max(5, Math.min(95, pct1));
+    return { p1: Math.round(pct1), p2: Math.round(100 - pct1) };
+  }
+  function pressureScore(player, winPct) {
+    let score = 0;
+    score += player.bpFaced * 8;
+    const bpUnsaved = player.bpFaced - player.bpSaved;
+    score += bpUnsaved * 15;
+    let trailing = (50 - winPct) * 0.8;
+    trailing = Math.max(0, Math.min(40, trailing));
+    score += trailing;
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+  function pressureLabel(score) {
+    if (score <= 39) return "Calm";
+    if (score <= 69) return "Building";
+    return "High";
+  }
+  function pressureDotClass(score) {
+    if (score <= 39) return "calm";
+    if (score <= 69) return "building";
+    return "high";
+  }
+  function serveDirection(trend) {
+    if (!trend || trend.length < 2) return "Steady";
+    const diff = trend[trend.length - 1] - trend[0];
+    if (diff >= 4) return "Improving";
+    if (diff <= -4) return "Dipping";
+    return "Steady";
+  }
+
+  /* ===========================================================
+     STEP 3 — SERVE CHART (preserved; 300x80 viewBox now)
+     =========================================================== */
+  function buildServeChart(trend) {
+    const W = 300, H = 80, PAD = 12;
+    if (!Array.isArray(trend) || trend.length < 2) {
+      return '<svg class="serve-chart" viewBox="0 0 ' + W + ' ' + H +
+             '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
+             '<line x1="' + PAD + '" y1="' + (H/2) + '" x2="' + (W-PAD) + '" y2="' + (H/2) +
+             '" stroke="var(--track)" stroke-width="2" stroke-dasharray="4 5" stroke-linecap="round" />' +
+             '<text x="' + (W/2) + '" y="' + (H/2 + 22) + '" fill="var(--muted)" font-size="11" ' +
+             'text-anchor="middle" font-family="Space Grotesk, sans-serif">No serve-trend data for this match</text>' +
+             '</svg>';
+    }
+    const min = Math.min.apply(null, trend);
+    const max = Math.max.apply(null, trend);
+    const range = (max - min) || 1;
+    const points = trend.map(function (val, i) {
+      const x = PAD + (i / (trend.length - 1)) * (W - PAD * 2);
+      const y = H - PAD - ((val - min) / range) * (H - PAD * 2);
+      return { x: x, y: y };
+    });
+    let linePath = "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
+    for (let i = 1; i < points.length; i++) linePath += " L " + points[i].x.toFixed(1) + " " + points[i].y.toFixed(1);
+    let areaPath = linePath +
+      " L " + points[points.length-1].x.toFixed(1) + " " + (H - PAD) +
+      " L " + points[0].x.toFixed(1) + " " + (H - PAD) + " Z";
+    let dots = "";
+    points.forEach(function (p) {
+      dots += '<circle class="serve-dot" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="4.5" />';
+    });
+    return '<svg class="serve-chart" viewBox="0 0 ' + W + ' ' + H +
+           '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
+           '<path class="serve-area" d="' + areaPath + '" />' +
+           '<path class="serve-line" d="' + linePath + '" />' + dots + '</svg>';
+  }
+
+  /* ===========================================================
+     STEP 4 — SMALL UTILITIES
+     =========================================================== */
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function $(id) { return document.getElementById(id); }
+
+  // Toast for API failures.
+  let toastTimer = null;
+  function showToast(message) {
+    const t = $("toast");
+    t.textContent = message;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 4000);
+  }
+
+  /* ===========================================================
+     STEP 5 — IMPORTANCE SORTING (tier → round → time)
+     =========================================================== */
+  function classifyTournament(name) {
+    const t = (name || "").toLowerCase();
+    function has() { for (let i = 0; i < arguments.length; i++) if (t.indexOf(arguments[i]) !== -1) return true; return false; }
+    if (has("wimbledon", "roland garros", "roland-garros", "us open", "australian open")) return { tier: 1, badge: "slam" };
+    if (has("masters", "indian wells", "miami open", "monte-carlo", "monte carlo", "madrid", "rome", "canada", "cincinnati", "shanghai", "paris")) return { tier: 2, badge: "masters" };
+    if (has("500", "barcelona", "queen", "halle", "tokyo", "beijing", "vienna", "basel", "rio")) return { tier: 3, badge: "t500" };
+  if (has("250", "stuttgart", "hertogenbosch", "nottingham", "rosmalen", "eastbourne", "mallorca", "s-hertogenbosch")) return { tier: 4, badge: "" };
+    if (has("challenger")) return { tier: 5, badge: "" };
+    if (has("itf", "m15", "m25", "w15", "w25")) return { tier: 6, badge: "" };
+    return { tier: 7, badge: "" };
+  }
+  function roundRank(round) {
+    const r = (round || "").toLowerCase();
+    if (r.indexOf("semi") !== -1) return 1;
+    if (r.indexOf("quarter") !== -1) return 2;
+    if (r.indexOf("final") !== -1) return 0;
+    if (r.indexOf("round") !== -1) return 3;
+    return 4;
+  }
+  function surfaceEmoji(name) {
+    const t = (name || "").toLowerCase();
+    if (/(wimbledon|halle|queen|nottingham|hertogenbosch|rosmalen|stuttgart|eastbourne|mallorca|grass)/.test(t)) return "🌱";
+    if (/(roland|french|clay|monte|madrid|rome|barcelona|hamburg|kitzbuhel|gstaad|bastad|umag)/.test(t)) return "🎾";
+    if (/(open|hard|cincinnati|indian wells|miami|shanghai|beijing|tokyo|australian|us open|canada|dubai|acapulco)/.test(t)) return "🏟️";
+    return "🎾";
+  }
+  function badgeDotHtml(badge) {
+    if (badge === "slam") return '<span class="dot dot-slam" aria-hidden="true"></span>';
+    if (badge === "masters") return '<span class="dot dot-masters" aria-hidden="true"></span>';
+    if (badge === "t500") return '<span class="dot dot-500" aria-hidden="true"></span>';
+    return "";
+  }
+  function sortMatches(list) {
+    return list.slice().sort(function (a, b) {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      if (a.roundRank !== b.roundRank) return a.roundRank - b.roundRank;
+      const ta = a.startLocal ? a.startLocal.getTime() : Infinity;
+      const tb = b.startLocal ? b.startLocal.getTime() : Infinity;
+      return ta - tb;
+    });
+  }
+
+  /* ===========================================================
+     STEP 6 — TIME HELPERS (venue-local labels + countdown)
+     The API gives plain "HH:MM" venue-local clock times. We DISPLAY
+     them as-is (with a venue-local disclaimer), and build a best-effort
+     local Date only to drive the countdown + the "starting soon" dot.
+     =========================================================== */
+  function dateString(offsetDays) {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  }
+  // Pretty 12-hour label from a raw "HH:MM" string, or null.
+  function prettyClock(raw) {
+    if (typeof raw !== "string") return null;
+    const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    let h = parseInt(m[1], 10);
+    const min = m[2];
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12; if (h === 0) h = 12;
+    return h + ":" + min + " " + ampm;
+  }
+  // Best-effort local Date for a "HH:MM" on a given day offset (for countdown).
+  function clockToLocalDate(raw, offsetDays) {
+    if (typeof raw !== "string") return null;
+    const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const d = new Date();
+    d.setDate(d.getDate() + (offsetDays || 0));
+    d.setHours(parseInt(m[1],10), parseInt(m[2],10), 0, 0);
+    return d;
+  }
+  function countdownText(target) {
+    const diff = target.getTime() - Date.now();
+    if (diff <= 0) return "Starting soon";
+    const totalMin = Math.floor(diff / 60000);
+    const h = Math.floor(totalMin / 60);
+    const mm = totalMin % 60;
+    if (h > 0 && mm > 0) return "Next match in " + h + "h " + mm + "m";
+    if (h > 0) return "Next match in " + h + "h";
+    return "Next match in " + mm + "m";
+  }
+
+  /* ===========================================================
+     STEP 7 — API CONFIG (preserved endpoints/headers/key)
+     =========================================================== */
   const LIVE_API_URL = "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/extend/api/events/live/tennis/";
   const FIXTURES_BASE = "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/fixtures/";
-  const LIVE_API_HEADERS = { "x-rapidapi-key":"cf9e49b00amshb6126622a1dd5aep18a720jsn1ee2048ea169", "x-rapidapi-host":"tennis-api-atp-wta-itf.p.rapidapi.com" };
-  function firstOf(obj,keys){if(!obj) return undefined;for(let i=0;i<keys.length;i++) if(obj[keys[i]]!==undefined&&obj[keys[i]]!==null) return obj[keys[i]];return undefined;}
-  function findEventsArray(data){if(Array.isArray(data))return data;const c=firstOf(data,["data","events","results","matches","response","result"]);if(Array.isArray(c))return c;if(c&&typeof c==="object"){const inner=firstOf(c,["events","results","matches","data"]);if(Array.isArray(inner))return inner;}return[];}
-  function readName(team){if(!team)return null;if(typeof team==="string")return team;const n=firstOf(team,["name","fullName","player","shortName","title"]);return n?String(n):null;}
-  function readSetScores(scoreObj){if(!scoreObj)return[];if(Array.isArray(scoreObj))return scoreObj.map(Number).filter(n=>!isNaN(n));const sets=[];for(let i=1;i<=5;i++){const v=firstOf(scoreObj,["period"+i,"set"+i,"s"+i]);if(v!==undefined&&v!==null&&!isNaN(Number(v))) sets.push(Number(v));}return sets;}
-  function readNames(ev){const home=firstOf(ev,["homeTeam","home","player1","firstPlayer","team1","p1"]),away=firstOf(ev,["awayTeam","away","player2","secondPlayer","team2","p2"]);let n1=readName(home),n2=readName(away);if((!n1||!n2)&&Array.isArray(ev.teams)&&ev.teams.length>=2){n1=n1||readName(ev.teams[0]);n2=n2||readName(ev.teams[1]);}n1=n1||(typeof ev.event_first_player==="string"?ev.event_first_player:null);n2=n2||(typeof ev.event_second_player==="string"?ev.event_second_player:null);return[n1,n2];}
-  function readTournament(ev){return firstOf(ev,["tournamentName"])||readName(firstOf(ev,["tournament","league","competition","season"]))||"";}
-  function mapLiveEventToMatch(ev){const names=readNames(ev);if(!names[0]||!names[1])return null;const homeScore=firstOf(ev,["homeScore","scoreHome","score1","homeSets","p1Score"]),awayScore=firstOf(ev,["awayScore","scoreAway","score2","awaySets","p2Score"]);return {tournament:String(readTournament(ev)||"Live Tennis"),match_name:names[0]+" vs "+names[1],status:String(firstOf(ev,["statusText","status","round","roundName"])||"Live"),isLive:true,detailed:false,players:[{name:names[0],set_scores:readSetScores(homeScore),firstServePct:0,aces:0,doubleFaults:0,bpFaced:0,bpSaved:0,serveTrend:[]},{name:names[1],set_scores:readSetScores(awayScore),firstServePct:0,aces:0,doubleFaults:0,bpFaced:0,bpSaved:0,serveTrend:[]}]};}
-  function dateString(offsetDays){const d=new Date();d.setDate(d.getDate()+offsetDays);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
-  function prettyClock(raw){if(typeof raw!=="string")return null;const m=raw.trim().match(/^(\d{1,2}):(\d{2})$/);if(!m)return null;let h=parseInt(m[1],10);const min=m[2],ampm=h>=12?"PM":"AM";h=h%12;if(h===0)h=12;return h+":"+min+" "+ampm;}
-  function clockToLocalDate(raw,offsetDays){if(typeof raw!=="string")return null;const m=raw.trim().match(/^(\d{1,2}):(\d{2})$/);if(!m)return null;const d=new Date();d.setDate(d.getDate()+(offsetDays||0));d.setHours(parseInt(m[1],10),parseInt(m[2],10),0,0);return d;}
-  function countdownText(target){const diff=target.getTime()-Date.now();if(diff<=0)return"Starting soon";const totalMin=Math.floor(diff/60000);const h=Math.floor(totalMin/60),mm=totalMin%60;if(h>0&&mm>0)return"Next match in "+h+"h "+mm+"m";if(h>0)return"Next match in "+h+"h";return"Next match in "+mm+"m";}
-  function mapFixture(ev,dayOffset,completed){const names=readNames(ev);if(!names[0]||!names[1])return null;const tournament=readTournament(ev);const round=firstOf(ev,["round","roundName","tournament_round"])||"";const cls=classifyTournament(tournament);const utcTime=firstOf(ev,["date","startTime","scheduled","scheduledTime","time","matchTime","start","event_time"]);let clockStr=null,startLocal=null;if(typeof utcTime==="string"){const d=new Date(utcTime);if(!isNaN(d.getTime())){startLocal=d;clockStr=d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});}else{const m=utcTime.trim().match(/^(\d{1,2}):(\d{2})$/);if(m)clockStr=prettyClock(utcTime);}}let sub="";if(tournament&&round)sub=tournament+" · "+round;else if(tournament)sub=String(tournament);else if(round)sub=String(round);return {players:names[0]+" vs "+names[1],p1:names[0],p2:names[1],tournament:tournament||"Tennis",round:round,sub:sub,tier:cls.tier,badge:cls.badge,roundRank:roundRank(round),surfaceEmoji:surfaceEmoji(tournament),clockLabel:clockStr,startLocal:startLocal||clockToLocalDate(clockStr,dayOffset),completed:!!completed,match:{tournament:tournament||"Tennis",match_name:names[0]+" vs "+names[1],status:completed?"Completed":"Upcoming",isLive:false,detailed:false,players:[{name:names[0],set_scores:[],firstServePct:0,aces:0,doubleFaults:0,bpFaced:0,bpSaved:0,serveTrend:[]},{name:names[1],set_scores:[],firstServePct:0,aces:0,doubleFaults:0,bpFaced:0,bpSaved:0,serveTrend:[]}]}};}
-  async function fetchTennisFixtures(dayOffset,completed){const res=await fetch(FIXTURES_BASE+dateString(dayOffset),{headers:LIVE_API_HEADERS});if(!res.ok)throw new Error("Fixtures status "+res.status);const data=await res.json();const events=findEventsArray(data);const out=[];for(let i=0;i<events.length;i++){const f=mapFixture(events[i],dayOffset,completed);if(f)out.push(f);}return out;}
-  async function tryLive(){try{const res=await fetch(LIVE_API_URL,{headers:LIVE_API_HEADERS});if(!res.ok)throw new Error("Live status "+res.status);const data=await res.json();const events=findEventsArray(data);const matches=[];for(let i=0;i<events.length;i++){const m=mapLiveEventToMatch(events[i]);if(m)matches.push(m);}return matches;}catch(err){console.warn("Live fetch failed:",err.message);return[];}}
-  let liveMatchesCache=[],todayMatches=[],upcomingMatches=[],recentMatches=[];
-  // ═══════════════════════════════════════════════════════════
-  //  FOOTBALL DATA (ESPN free API)
-  // ═══════════════════════════════════════════════════════════
-  const ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
-  let footballMatches = [], CURRENT_FOOTBALL = null;
-  const FLAG_MAP = { QAT:"🇶🇦",SUI:"🇨🇭",USA:"🇺🇸",CAN:"🇨🇦",MEX:"🇲🇽",BRA:"🇧🇷",ARG:"🇦🇷",GER:"🇩🇪",FRA:"🇫🇷",ESP:"🇪🇸",ENG:"🏴󠁧󠁢󠁥󠁮󠁧󠁿",NED:"🇳🇱",ITA:"🇮🇹",POR:"🇵🇹",URU:"🇺🇾",JPN:"🇯🇵",KOR:"🇰🇷",SEN:"🇸🇳",MAR:"🇲🇦",CMR:"🇨🇲",GHA:"🇬🇭",TUN:"🇹🇳",CRC:"🇨🇷",IRN:"🇮🇷",KSA:"🇸🇦",AUS:"🇦🇺",NZL:"🇳🇿",SRB:"🇷🇸",CRO:"🇭🇷",BEL:"🇧🇪",POL:"🇵🇱",WAL:"🏴󠁧󠁢󠁷󠁬󠁳󠁿",UKR:"🇺🇦",SWE:"🇸🇪",DEN:"🇩🇰",NOR:"🇳🇴",COL:"🇨🇴",CHI:"🇨🇱",PER:"🇵🇪",ECU:"🇪🇨",PAR:"🇵🇾",VEN:"🇻🇪",BOL:"🇧🇴",NGA:"🇳🇬",EGY:"🇪🇬",ALG:"🇩🇿",CIV:"🇨🇮",RSA:"🇿🇦" };
-  function getFlag(abbr){return FLAG_MAP[abbr?.toUpperCase()]||(abbr?String(abbr[0]).toUpperCase():"🏳");}
-  async function fetchFootballMatches(){try{const res=await fetch(ESPN_SCOREBOARD);if(!res.ok)throw new Error("ESPN status "+res.status);const data=await res.json();footballMatches=data.events||[];}catch(e){console.warn("Football fetch failed:",e.message);footballMatches=[];}}
-  function getFootballStatus(ev){const state=ev?.competitions?.[0]?.status?.type?.state;if(state==="in")return"live";if(state==="post")return"completed";return"upcoming";}
-  function parseFootballMatch(ev){const comp=ev.competitions?.[0]||{};const home=comp.competitors?.find(c=>c.homeAway==="home")||{};const away=comp.competitors?.find(c=>c.homeAway==="away")||{};return {id:ev.id,date:ev.date,name:ev.name,shortName:ev.shortName,status:getFootballStatus(ev),homeTeam:{name:home.team?.displayName||"Home",abbr:home.team?.abbreviation||"",flag:getFlag(home.team?.abbreviation),score:parseInt(home.score)||0,logo:home.team?.logo||""},awayTeam:{name:away.team?.displayName||"Away",abbr:away.team?.abbreviation||"",flag:getFlag(away.team?.abbreviation),score:parseInt(away.score)||0,logo:away.team?.logo||""},venue:comp.venue?.fullName||ev.venue?.displayName||"",group:comp.altGameNote||ev.notes?.[0]||"",odds:comp.odds?.[0]||null,statusDetail:comp.status?.type?.detail||""};}
-  // ═══════════════════════════════════════════════════════════
-  //  UTILITIES
-  // ═══════════════════════════════════════════════════════════
-  function $(id){return document.getElementById(id);}
-  function escapeHtml(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
-  let toastTimer=null;
-  function showToast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove("show"),4000);}
-  // ═══════════════════════════════════════════════════════════
-  //  SPORT MANAGEMENT
-  // ═══════════════════════════════════════════════════════════
-  function setSport(sport){currentSport=sport;localStorage.setItem(SPORT_KEY,sport);if(sport==="football"){document.documentElement.setAttribute("data-sport","football");document.documentElement.removeAttribute("data-surface");}else{document.documentElement.removeAttribute("data-sport");applySurface(localStorage.getItem(SURFACE_KEY)||"clay");}$("sportSelect").value=sport;updateNowBar();renderActiveTab();}
-  // ═══════════════════════════════════════════════════════════
-  //  THEME & SURFACE
-  // ═══════════════════════════════════════════════════════════
-  const surfaceSelect=$("surfaceSelect"),themeToggle=$("themeToggle");
-  function applyTheme(theme){document.documentElement.setAttribute("data-theme",theme);themeToggle.textContent=theme==="light"?"☀️":"🌙";localStorage.setItem(THEME_KEY,theme);}
-  function applySurface(surface){if(currentSport!=="tennis")return;document.documentElement.setAttribute("data-surface",surface);surfaceSelect.value=surface;localStorage.setItem(SURFACE_KEY,surface);}
-  applyTheme(localStorage.getItem(THEME_KEY)||"dark");
-  if(currentSport==="tennis") applySurface(localStorage.getItem(SURFACE_KEY)||"clay");
-  themeToggle.addEventListener("click",()=>{const next=document.documentElement.getAttribute("data-theme")==="light"?"dark":"light";applyTheme(next);if(activeTab==="share")drawSharePreview();});
-  surfaceSelect.addEventListener("change",()=>{if(currentSport!=="tennis")return;applySurface(surfaceSelect.value);if(activeTab==="share")drawSharePreview();});
-  $("sportSelect").addEventListener("change",()=>setSport($("sportSelect").value));
-  // ═══════════════════════════════════════════════════════════
-  //  TAB NAVIGATION
-  // ═══════════════════════════════════════════════════════════
-  let activeTab="home";
-  const navButtons=document.querySelectorAll(".navbtn");
-  function showTab(name){activeTab=name;document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));$("tab-"+name).classList.add("active");navButtons.forEach(btn=>{const on=btn.getAttribute("data-tab")===name;btn.classList.toggle("active",on);if(on)btn.setAttribute("aria-current","page");else btn.removeAttribute("aria-current");});$("nowbar").classList.toggle("hidden",!(name==="home"||name==="matches"));if(name==="share")drawSharePreview();window.scrollTo({top:0,behavior:"smooth"});renderActiveTab();}
-  navButtons.forEach(btn=>btn.addEventListener("click",()=>showTab(btn.getAttribute("data-tab"))));
-  // ═══════════════════════════════════════════════════════════
-  //  NOW BAR
-  // ═══════════════════════════════════════════════════════════
-  function updateNowBar(){const dot=$("nowDot"),text=$("nowText"),brandLive=$("brandLive");if(currentSport==="tennis"){const gsInfo=nextSlamInfo();if(gsInfo.isLive){dot.classList.remove("hidden");brandLive.classList.remove("hidden");text.textContent="● "+gsInfo.slam.name+" is underway";}else{dot.classList.add("hidden");brandLive.classList.add("hidden");const days=gsInfo.daysUntil;text.textContent=(days>0?gsInfo.slam.name+" starts in "+days+" day"+(days===1?"":"s")+" · ":"")+"No live matches right now";}}else{dot.classList.add("hidden");brandLive.classList.add("hidden");text.textContent="World Cup 2026 · Group Stage";}}
-  // ═══════════════════════════════════════════════════════════
-  //  ACTIVE TAB RENDERER
-  // ═══════════════════════════════════════════════════════════
-  function renderActiveTab(){if(currentSport==="tennis")renderTennisTab(activeTab);else renderFootballTab(activeTab);}
-  // ═══════════════════════════════════════════════════════════
-  //  TENNIS RENDERING (fully preserved)
-  // ═══════════════════════════════════════════════════════════
-  const HOME_FILTERS=["All","ATP","Grand Slams","Challenger","ITF"],MATCH_FILTERS=["All","ATP","WTA","Grand Slams","Challenger","ITF"];
-  let homeFilter="All",matchFilter="All",homeCountdownTimer=null;
-  function matchPassesFilter(m,filter){return true;}
-  function stopHomeCountdown(){if(homeCountdownTimer){clearInterval(homeCountdownTimer);homeCountdownTimer=null;}}
-  function buildPills(container,filters,current,onPick){container.innerHTML=filters.map(f=>`<button class="pill${f===current?" active":""}">${escapeHtml(f)}</button>`).join("");container.querySelectorAll(".pill").forEach((btn,i)=>{btn.addEventListener("click",()=>onPick(filters[i]));});}
-  function renderFeatured(match){const p1=match.players[0],p2=match.players[1];const wp=winProbabilities(p1,p2),p1Leads=wp.p1>=wp.p2;$("featTournament").textContent=match.tournament;$("featName1").textContent=p1.name;$("featName2").textContent=p2.name;$("featName1").classList.toggle("dim",!p1Leads);$("featName2").classList.toggle("dim",p1Leads);$("featScores1").innerHTML=p1.set_scores.map(g=>"<span>"+g+"</span>").join("");$("featScores2").innerHTML=p2.set_scores.map(g=>"<span>"+g+"</span>").join("");}
-  function bindEmptyButtons(scope){const refresh=scope.querySelector("[data-action='refresh']");if(refresh)refresh.addEventListener("click",refreshAll);const classic=scope.querySelector("[data-action='classic']");if(classic)classic.addEventListener("click",()=>{loadMatch(FALLBACK_DATA.matches[0]);showTab("analysis");});}
-  function renderMatchList(container,list,emptyEl,emptyHtml){const sorted=sortMatches(list);if(sorted.length===0){container.innerHTML="";emptyEl.classList.remove("hidden");emptyEl.innerHTML=emptyHtml;bindEmptyButtons(emptyEl);return;}emptyEl.classList.add("hidden");container.innerHTML=sorted.map((m,i)=>{const timeHtml=m.clockLabel?escapeHtml(m.clockLabel)+' <span class="no-time" style="display:block;font-size:10px;">venue local</span>':'<span class="no-time">TBD</span>';return`<div class="mcard" data-idx="${i}">${badgeDotHtml(m.badge)}<span class="mcard-tag">${escapeHtml(m.tournament.split(" ")[0])}</span><div class="mcard-body"><div class="mcard-players">${escapeHtml(m.players)}</div><div class="mcard-sub">${m.surfaceEmoji} ${escapeHtml(m.sub)}</div></div><div class="mcard-time">${timeHtml}</div></div>`;}).join("");container.querySelectorAll(".mcard").forEach((card,idx)=>{card.addEventListener("click",()=>{loadMatch(sorted[idx].match);showTab("analysis");});});}
-  function showListSkeleton(container,n){container.innerHTML="";for(let i=0;i<n;i++)container.innerHTML+='<div class="skeleton sk-mcard"></div>';}
-  function showTodaySkeleton(){$("todayEmpty").classList.add("hidden");$("todayScroll").classList.remove("hidden");$("todayScroll").innerHTML="";for(let i=0;i<4;i++)$("todayScroll").innerHTML+='<div class="skeleton sk-hcard"></div>';}
-  function renderToday(){const scroll=$("todayScroll"),empty=$("todayEmpty"),cd=$("todayCountdown");const filtered=sortMatches(todayMatches.filter(m=>matchPassesFilter(m,homeFilter)));$("todayCount").textContent=todayMatches.length?"("+todayMatches.length+")":"";stopHomeCountdown();if(filtered.length===0){scroll.classList.add("hidden");cd.innerHTML="";empty.classList.remove("hidden");empty.innerHTML='<div class="empty"><div class="empty-ball">🎾</div><div class="empty-title">No matches scheduled today</div><div class="empty-sub">Check the next Grand Slam below.</div></div>';return;}empty.classList.add("hidden");scroll.classList.remove("hidden");const now=Date.now();let nextStart=null;filtered.forEach(m=>{if(m.startLocal&&m.startLocal.getTime()>now&&(!nextStart||m.startLocal<nextStart))nextStart=m.startLocal;});if(nextStart){cd.innerHTML='<span class="countdown-badge"><span class="pulse-dot"></span><span id="todayCdText"></span></span>';const tick=()=>{const el=$("todayCdText");if(!el){stopHomeCountdown();return;}el.textContent=countdownText(nextStart);};tick();homeCountdownTimer=setInterval(tick,60000);}else{cd.innerHTML="";}const HOUR=3600000;scroll.innerHTML=filtered.map((m,i)=>{const soon=m.startLocal&&m.startLocal.getTime()>now&&(m.startLocal.getTime()-now)<=HOUR;const dot=badgeDotHtml(m.badge)||(soon?'<span class="dot dot-soon"></span>':"");const timeLabel=m.clockLabel?m.clockLabel:"TBD";return`<div class="hcard" data-idx="${i}"><div class="hcard-top">${dot}<span class="hcard-tour">${escapeHtml(m.tournament)}</span></div><div class="hcard-players">${escapeHtml(m.players)}</div><div class="hcard-time">${m.surfaceEmoji} ${escapeHtml(timeLabel)}</div></div>`;}).join("");scroll.querySelectorAll(".hcard").forEach((card,idx)=>{card.addEventListener("click",()=>{loadMatch(filtered[idx].match);showTab("analysis");});});}
-  function renderUpcoming(){const filtered=upcomingMatches.filter(m=>matchPassesFilter(m,matchFilter));renderMatchList($("upcomingList"),filtered,$("upcomingEmpty"),'<div class="empty"><div class="empty-ball">🎾</div><div class="empty-title">No upcoming matches found</div><button class="btn btn-outline" data-action="refresh">Refresh</button></div>');}
-  function renderRecent(){renderMatchList($("recentList"),recentMatches,$("recentEmpty"),'<div class="empty"><div class="empty-ball">🎾</div><div class="empty-title">No recent matches found</div><div class="empty-sub">Revisit a classic instead.</div><button class="btn btn-outline" data-action="classic">View this classic final</button></div>');}
-  function loadMatch(match){CURRENT_TENNIS=match;renderTennisAnalysis();}
-  function statusPillHtml(match){if(match.isLive)return'<span class="live-dot"></span>Live';if(/complete/i.test(match.status))return"Completed";if(/upcoming/i.test(match.status))return"Upcoming";return escapeHtml(match.status||"Match");}
-  function noStatsMsg(){return'<div class="card-msg"><b>Detailed stats unavailable for this match</b>Full analysis is available for completed matches with hardcoded or scraped data.</div>';}
-  function renderTennisAnalysis(){const match=CURRENT_TENNIS||FALLBACK_DATA.matches[0];const p1=match.players[0],p2=match.players[1];$("anStatus").innerHTML=statusPillHtml(match);$("anTournament").textContent=match.tournament;$("anMatch").textContent=match.match_name;if(p1.set_scores.length){const line=p1.set_scores.map((g,i)=>g+"-"+(p2.set_scores[i]!=null?p2.set_scores[i]:"?")).join("  ");$("anScoreline").textContent=line;}else{$("anScoreline").textContent="";}if(match.detailed===false){$("wpBody").innerHTML=noStatsMsg();$("pressureBody").innerHTML=noStatsMsg();$("serveBody").innerHTML=noStatsMsg();return;}const wp=winProbabilities(p1,p2),p1Leads=wp.p1>=wp.p2;$("wpBody").innerHTML=`<div class="wp-row"><div class="wp-side left"><div class="wp-name">${escapeHtml(p1.name)}</div><div class="wp-pct${p1Leads?" lead":""}">${wp.p1}%</div></div><div class="wp-side right"><div class="wp-name">${escapeHtml(p2.name)}</div><div class="wp-pct${!p1Leads?" lead":""}">${wp.p2}%</div></div></div><div class="momentum"><div class="momentum-fill" id="momFill"></div><div class="momentum-center"></div></div><div class="wp-foot"><span>${escapeHtml(p1.name)}</span><span>${escapeHtml(p2.name)}</span></div>`;requestAnimationFrame(()=>{const f=$("momFill");if(f)f.style.width=wp.p1+"%";});const pr1=pressureScore(p1,wp.p1),pr2=pressureScore(p2,wp.p2);$("pressureBody").innerHTML=[[p1,pr1],[p2,pr2]].map(pair=>{const player=pair[0],score=pair[1];const label=pressureLabel(score),dotc=pressureDotClass(score);return`<div class="pressure-item"><div class="pressure-top"><span class="pressure-name">${escapeHtml(player.name)}</span><span class="pressure-status"><span class="pdot ${dotc}"></span><b>${label}</b> · ${score}</span></div><div class="pbar"><div class="pbar-fill" data-w="${score}"></div></div></div>`;}).join("");requestAnimationFrame(()=>{document.querySelectorAll("#pressureBody .pbar-fill").forEach(el=>{el.style.width=el.getAttribute("data-w")+"%";});});$("serveBody").innerHTML=[p1,p2].map(player=>{const dir=serveDirection(player.serveTrend);const cls=dir==="Improving"?"up":dir==="Dipping"?"down":"steady";const arrow=dir==="Improving"?"▲":dir==="Dipping"?"▼":"→";return`<div class="serve-item"><div class="serve-top"><span class="serve-name">${escapeHtml(player.name)}</span><span class="serve-dir ${cls}">${arrow} ${dir}</span></div>${buildServeChart(player.serveTrend)}</div>`;}).join("");}
-  async function loadToday(){showTodaySkeleton();try{todayMatches=await fetchTennisFixtures(0,false);if(todayMatches.length===0)throw new Error("No fixtures today");}catch(err){console.warn("Today fixtures failed:",err.message);todayMatches=[];}renderToday();}
-  async function loadUpcoming(){showListSkeleton($("upcomingList"),5);try{let list=await fetchTennisFixtures(0,false);if(list.length===0)list=await fetchTennisFixtures(1,false);upcomingMatches=list;}catch(err){console.warn("Upcoming fixtures failed:",err.message);upcomingMatches=[];}renderUpcoming();}
-  async function loadRecent(){showListSkeleton($("recentList"),5);let list=[];try{const d1=await fetchTennisFixtures(-1,true);const d2=await fetchTennisFixtures(-2,true);list=d1.concat(d2);}catch(err){console.warn("Recent fixtures failed:",err.message);list=[];}recentMatches=list;renderRecent();}
-  const refreshBtn=$("refreshBtn");
-  async function refreshAll(){$("ptr").classList.add("active");const original="🔄 Refresh live data";refreshBtn.disabled=true;refreshBtn.textContent="Refreshing…";let anySuccess=false;try{liveMatchesCache=await tryLive();await loadToday();await loadUpcoming();anySuccess=todayMatches.length>0||upcomingMatches.length>0||liveMatchesCache.length>0;}catch(err){anySuccess=false;}const gsInfo=renderGrandSlam();updateNowBar();renderHeroLive(gsInfo,liveMatchesCache);$("ptr").classList.remove("active");refreshBtn.disabled=false;if(anySuccess){refreshBtn.textContent="✓ Updated";refreshBtn.style.color="var(--accent)";setTimeout(()=>{refreshBtn.textContent=original;refreshBtn.style.color="";},1500);}else{refreshBtn.textContent="✗ Couldn't refresh";refreshBtn.style.color="var(--red)";showToast("Could not reach tennis data. Showing Roland-Garros final.");setTimeout(()=>{refreshBtn.textContent=original;refreshBtn.style.color="";},2000);}}
-  refreshBtn.addEventListener("click",refreshAll);
-  function renderGrandSlam(){const info=nextSlamInfo();const s=info.slam;$("gsEmoji").textContent=s.emoji;$("gsName").textContent=s.name;$("gsDate").textContent=fmtDate(parseYMD(s.start));const countEl=$("gsCount");if(info.isLive){countEl.textContent="LIVE NOW";countEl.classList.add("live");}else{countEl.classList.remove("live");countEl.textContent=info.daysUntil<=0?"Today":info.daysUntil===1?"Starts tomorrow":info.daysUntil+" days";}$("gsProgress").style.width=(info.progress*100)+"%";return info;}
-  function renderNowBarTennis(liveMatches,gsInfo){const dot=$("nowDot"),text=$("nowText");const liveCount=liveMatches?liveMatches.length:0;if(gsInfo&&gsInfo.isLive){dot.classList.remove("hidden");text.textContent="● "+gsInfo.slam.name+" is underway"+(liveCount?" · "+liveCount+" matches live":"");$("brandLive").classList.remove("hidden");}else if(liveCount>0){dot.classList.remove("hidden");text.textContent=liveCount+(liveCount===1?" match live":" matches live");$("brandLive").classList.add("hidden");}else{dot.classList.add("hidden");$("brandLive").classList.add("hidden");const days=gsInfo?gsInfo.daysUntil:0;text.textContent=(days>0?gsInfo.slam.name+" starts in "+days+" day"+(days===1?"":"s")+" · ":"")+"No live matches right now";}}
-  function renderHeroLive(gsInfo,liveMatches){const el=$("heroLive"),txt=$("heroLiveText");if(gsInfo&&gsInfo.isLive){el.classList.remove("hidden");txt.textContent="● "+gsInfo.slam.name+" LIVE";}else{el.classList.add("hidden");}}
-  function renderTennisHome(){$("heroTagline").textContent="Tennis momentum, decoded.";$("heroSubdesc").textContent="Real-time win probability, pressure moments, and serve trends for every match.";$("heroBrowseBtn").textContent="Browse matches →";$("scrollNote").textContent="Times in venue local · Verify at flashscore.com";const gsInfo=renderGrandSlam();$("featuredCard").classList.remove("hidden");$("gsCard").classList.remove("hidden");renderFeatured(FALLBACK_DATA.matches[0]);const featBtn=$("featuredCard");featBtn.onclick=()=>{loadMatch(FALLBACK_DATA.matches[0]);showTab("analysis");};$("heroBrowseBtn").onclick=()=>showTab("matches");$("exampleViewBtn").onclick=()=>{loadMatch(FALLBACK_DATA.matches[0]);showTab("analysis");};buildPills($("homePills"),HOME_FILTERS,homeFilter,f=>{homeFilter=f;buildPills($("homePills"),HOME_FILTERS,homeFilter,()=>{});renderToday();});buildPills($("matchPills"),MATCH_FILTERS,matchFilter,f=>{matchFilter=f;buildPills($("matchPills"),MATCH_FILTERS,matchFilter,()=>{});renderUpcoming();});$("matchesSubtabs").classList.remove("hidden");$("upcomingView").classList.remove("hidden");$("recentView").classList.add("hidden");$("subUpcoming").classList.add("active");$("subRecent").classList.remove("active");}
-  function renderTennisMatches(){$("heroTagline").textContent="Tennis matches";$("heroSubdesc").textContent="";$("heroBrowseBtn").textContent="Refresh data";$("scrollNote").textContent="";}
-  function renderTennisShare(){if(!CURRENT_TENNIS){$("shareLoaded").classList.add("hidden");$("shareEmpty").classList.remove("hidden");return;}$("shareLoaded").classList.remove("hidden");$("shareEmpty").classList.add("hidden");}
-  function renderTennisTab(tab){if(tab==="home"){renderTennisHome();loadToday();}else if(tab==="matches"){renderTennisMatches();loadUpcoming();}else if(tab==="analysis")renderTennisAnalysis();else if(tab==="share")renderTennisShare();}
-  // ═══════════════════════════════════════════════════════════
-  //  FOOTBALL RENDERING
-  // ═══════════════════════════════════════════════════════════
-  function renderFootballHome(){$("heroTagline").textContent="World Cup 2026";$("heroSubdesc").textContent="Real‑time scores, lineups, and match details.";$("heroBrowseBtn").textContent="View all matches →";$("scrollNote").textContent="Data via ESPN · Times shown in your local timezone";$("featuredCard").classList.add("hidden");$("gsCard").classList.add("hidden");$("matchesSubtabs").classList.add("hidden");$("upcomingView").classList.add("hidden");$("recentView").classList.add("hidden");const now=new Date();const upcoming=footballMatches.filter(m=>getFootballStatus(m)==="upcoming").sort((a,b)=>new Date(a.date)-new Date(b.date));const live=footballMatches.filter(m=>getFootballStatus(m)==="live");const completed=footballMatches.filter(m=>getFootballStatus(m)==="completed");const allSorted=[...live,...upcoming,...completed];const featured=live[0]||upcoming[0]||completed[0];const nextMatch=upcoming[0];let h='';if(featured){const fm=parseFootballMatch(featured);h+=`<div class="card featured" id="featFootball"><div class="feat-tournament">${escapeHtml(fm.group||'World Cup')}</div><div class="feat-row"><div class="feat-name">${fm.homeTeam.flag} ${escapeHtml(fm.homeTeam.name)}</div><div class="feat-scores"><span>${fm.homeTeam.score}</span></div></div><div class="feat-row"><div class="feat-name">${fm.awayTeam.flag} ${escapeHtml(fm.awayTeam.name)}</div><div class="feat-scores"><span>${fm.awayTeam.score}</span></div></div><div class="feat-foot"><span class="link-btn">View analysis →</span></div></div>`;}if(nextMatch){const nm=parseFootballMatch(nextMatch);const diff=new Date(nm.date)-now;let cd='';if(diff>0){const hh=Math.floor(diff/3600000);const mm=Math.floor((diff%3600000)/60000);cd=`in ${hh}h ${mm}m`;}else{cd='Starting soon';}h+=`<div><span class="countdown-badge"><span class="pulse-dot"></span>Next match: ${nm.homeTeam.flag} ${nm.homeTeam.name} vs ${nm.awayTeam.flag} ${nm.awayTeam.name} ${cd}</span></div>`;}const todayMatchesList=allSorted.slice(0,10);h+=`<div><div class="section-title">Matches</div><div class="hscroll" id="fbTodayScroll"></div></div>`;h+=`<div><div class="section-title">How it works</div><div class="how-grid"><div class="how-card"><div class="how-emoji">①</div><div class="how-title">Select a match</div><div class="how-desc">Browse World Cup fixtures.</div></div><div class="how-card"><div class="how-emoji">②</div><div class="how-title">Follow live</div><div class="how-desc">Scores, stats, and lineups.</div></div><div class="how-card"><div class="how-emoji">③</div><div class="how-title">Share the moment</div><div class="how-desc">Download a World Cup card.</div></div></div></div>`;const homeContainer = document.querySelector("#tab-home .stack");
-if (homeContainer) homeContainer.innerHTML = h;const scroll=$("fbTodayScroll");if(scroll){scroll.innerHTML=todayMatchesList.map(ev=>{const m=parseFootballMatch(ev);const timeStr=m.status==='live'?'🔴 Live':new Date(m.date).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});return`<div class="hcard" data-id="${m.id}"><div class="hcard-top"><span>${escapeHtml(m.group||'')}</span></div><div class="hcard-players">${m.homeTeam.flag} ${escapeHtml(m.homeTeam.name)}<br>${m.awayTeam.flag} ${escapeHtml(m.awayTeam.name)}</div><div class="hcard-time">${timeStr}${m.status==='completed'?' | FT':''}</div></div>`;}).join('');scroll.querySelectorAll(".hcard").forEach(card=>{card.addEventListener("click",()=>{const mid=card.dataset.id;const match=footballMatches.find(ev=>ev.id===mid);if(match){CURRENT_FOOTBALL=parseFootballMatch(match);showTab("analysis");}});});}if(featured){const featEl=$("featFootball");if(featEl)featEl.addEventListener("click",()=>{CURRENT_FOOTBALL=parseFootballMatch(featured);showTab("analysis");});}}
-  function renderFootballMatches(){let h=`<div class="subtabs"><button class="subtab active" id="fbUpcoming">Upcoming</button><button class="subtab" id="fbLive">Live</button><button class="subtab" id="fbCompleted">Completed</button></div>`;h+=`<button class="btn btn-outline" id="fbRefreshBtn" style="margin-bottom:14px;">🔄 Refresh matches</button>`;h+=`<div class="mlist" id="fbMatchList"></div>`;const matchesContainer = document.querySelector("#tab-matches");
-if (matchesContainer) matchesContainer.innerHTML = h;function renderList(filter){let list=footballMatches;if(filter==='upcoming')list=list.filter(ev=>getFootballStatus(ev)==='upcoming');else if(filter==='live')list=list.filter(ev=>getFootballStatus(ev)==='live');else if(filter==='completed')list=list.filter(ev=>getFootballStatus(ev)==='completed');list.sort((a,b)=>new Date(a.date)-new Date(b.date));const container=$if (!container) return;("fbMatchList");container.innerHTML=list.map(ev=>{const m=parseFootballMatch(ev);const timeStr=m.status==='live'?'🔴 Live':new Date(m.date).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});return`<div class="mcard" data-id="${m.id}"><span class="mcard-tag">${m.status==='live'?'LIVE':m.status==='completed'?'FT':'Upcoming'}</span><div class="mcard-body"><div class="mcard-players">${m.homeTeam.flag} ${escapeHtml(m.homeTeam.name)} vs ${m.awayTeam.flag} ${escapeHtml(m.awayTeam.name)}</div><div class="mcard-sub">${escapeHtml(m.venue||'')}</div></div><div class="mcard-time">${timeStr}${m.status==='completed'?' | '+m.homeTeam.score+'-'+m.awayTeam.score:''}</div></div>`;}).join('');container.querySelectorAll(".mcard").forEach(card=>{card.addEventListener("click",()=>{const mid=card.dataset.id;const match=footballMatches.find(ev=>ev.id===mid);if(match){CURRENT_FOOTBALL=parseFootballMatch(match);showTab("analysis");}});});}renderList('upcoming');$("fbUpcoming").addEventListener("click",()=>renderList('upcoming'));$("fbLive").addEventListener("click",()=>renderList('live'));$("fbCompleted").addEventListener("click",()=>renderList('completed'));$("fbRefreshBtn").addEventListener("click",async()=>{await fetchFootballMatches();renderList('upcoming');showToast("Matches refreshed from ESPN");});}
-  function renderFootballAnalysis(){if(!CURRENT_FOOTBALL){$("analysisContent").innerHTML=`<div class="card-msg"><b>Select a match</b></div>`;return;}const m=CURRENT_FOOTBALL;let h=`<div class="back-link"><button class="link-btn" id="fbBackToMatches">← Back to matches</button></div><div class="card an-head"><div><span class="status-pill">${m.status==='live'?'<span class="live-dot"></span>Live':m.status==='completed'?'Completed':'Scheduled'}</span></div><div class="an-tournament">${escapeHtml(m.group||'World Cup')}</div><div class="an-match">${m.homeTeam.flag} ${escapeHtml(m.homeTeam.name)} vs ${m.awayTeam.flag} ${escapeHtml(m.awayTeam.name)}</div><div class="an-scoreline">${m.homeTeam.score} - ${m.awayTeam.score}  ·  ${escapeHtml(m.venue||'')}</div></div><div class="card"><div class="label">Match detail</div><div class="card-msg">Lineups, events, and advanced stats will be available when the match is live or completed. Check back!</div></div>`;$("analysisContent").innerHTML=h;$("fbBackToMatches")?.addEventListener("click",()=>showTab("matches"));}
-  function drawFootballShareCanvas(){if(!CURRENT_FOOTBALL)return;const canvas=$("shareCanvas");const ctx=canvas.getContext("2d");const W=1080,H=1350,accent="#2e7d32",accentRgb="46,125,50";const m=CURRENT_FOOTBALL;ctx.fillStyle="#0b0d0f";ctx.fillRect(0,0,W,H);const glow=ctx.createRadialGradient(W-120,60,60,W-120,60,720);glow.addColorStop(0,"rgba("+accentRgb+",0.30)");glow.addColorStop(1,"rgba("+accentRgb+",0)");ctx.fillStyle=glow;ctx.fillRect(0,0,W,H);ctx.fillStyle=accent;ctx.fillRect(0,0,W,8);const M=80;ctx.fillStyle=accent;ctx.beginPath();ctx.arc(M+9,92,12,0,Math.PI*2);ctx.fill();ctx.fillStyle="#f4f6f7";ctx.font="700 40px 'Space Grotesk', sans-serif";ctx.fillText("BREAK",M+32,105);ctx.fillStyle="#8a929b";ctx.font="600 24px 'Space Grotesk', sans-serif";ctx.fillText("WORLD CUP 2026",M,160);ctx.font="700 50px 'Space Grotesk', sans-serif";ctx.fillStyle="#f4f6f7";ctx.textAlign="left";ctx.fillText(m.homeTeam.flag+" "+m.homeTeam.name,M,270);ctx.textAlign="right";ctx.fillText(m.homeTeam.score,W-M,270);ctx.font="700 50px 'Space Grotesk', sans-serif";ctx.textAlign="left";ctx.fillText(m.awayTeam.flag+" "+m.awayTeam.name,M,340);ctx.textAlign="right";ctx.fillText(m.awayTeam.score,W-M,340);ctx.textAlign="center";ctx.fillStyle="#8a929b";ctx.font="600 26px 'Space Grotesk', sans-serif";ctx.fillText("FIFA WORLD CUP",W/2,470);ctx.fillStyle=accent;ctx.font="700 180px 'Space Grotesk', sans-serif";ctx.fillText(m.homeTeam.score+"-"+m.awayTeam.score,W/2,640);ctx.fillStyle="#f4f6f7";ctx.font="600 36px 'Space Grotesk', sans-serif";ctx.fillText(m.homeTeam.name+" vs "+m.awayTeam.name,W/2,720);const barX=M,barY=800,barW=W-M*2,barH=26;ctx.fillStyle="rgba(255,255,255,0.08)";ctx.beginPath();ctx.rect(barX,barY,barW,barH);ctx.fill();const totalScore=m.homeTeam.score+m.awayTeam.score||1;ctx.fillStyle=accent;ctx.beginPath();ctx.rect(barX,barY,barW*(m.homeTeam.score/totalScore),barH);ctx.fill();ctx.fillStyle="rgba(255,255,255,0.45)";ctx.fillRect(barX+barW/2-1,barY,2,barH);ctx.textAlign="left";ctx.fillStyle="#8a929b";ctx.font="500 24px 'Space Grotesk', sans-serif";ctx.fillText("Updated "+new Date().toLocaleString(),M,1260);ctx.textAlign="right";ctx.fillStyle=accent;ctx.font="600 24px 'Space Grotesk', sans-serif";ctx.fillText("BREAK · World Cup 2026",W-M,1260);}
-  async function drawFootballSharePreview(){if(!CURRENT_FOOTBALL){$("shareLoaded").classList.add("hidden");$("shareEmpty").classList.remove("hidden");return;}$("shareLoaded").classList.remove("hidden");$("shareEmpty").classList.add("hidden");await new Promise(r=>{if(document.fonts&&document.fonts.ready)document.fonts.ready.then(r);else r();});drawFootballShareCanvas();const src=$("shareCanvas");const preview=$("sharePreview");preview.innerHTML="";const clone=document.createElement("canvas");clone.width=src.width;clone.height=src.height;clone.getContext("2d").drawImage(src,0,0);preview.appendChild(clone);$("downloadBtn").onclick=()=>{const canvas=$("shareCanvas");canvas.toBlob(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="worldcup-card.png";document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);},'image/png');};}
-  function renderFootballTab(tab){if(tab==="home")renderFootballHome();else if(tab==="matches")renderFootballMatches();else if(tab==="analysis")renderFootballAnalysis();else if(tab==="share")drawFootballSharePreview();}
-  // ═══════════════════════════════════════════════════════════
-  //  SHARE PREVIEW DISPATCHER
-  // ═══════════════════════════════════════════════════════════
-  async function drawSharePreview(){if(currentSport==="tennis"){if(CURRENT_TENNIS){$("shareLoaded").classList.remove("hidden");$("shareEmpty").classList.add("hidden");}}else{await drawFootballSharePreview();}}
-  // ═══════════════════════════════════════════════════════════
-  //  SHARE BUTTONS
-  // ═══════════════════════════════════════════════════════════
-  $("downloadBtn").addEventListener("click",()=>{if(currentSport==="tennis"&&CURRENT_TENNIS){downloadTennisCard();}else if(currentSport==="football"&&CURRENT_FOOTBALL){drawFootballShareCanvas();const canvas=$("shareCanvas");canvas.toBlob(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="worldcup-card.png";document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);},'image/png');}});
-  function downloadTennisCard(){if(!CURRENT_TENNIS)return;renderShareCanvas();const canvas=$("shareCanvas");const safe=n=>String(n).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");const filename="break-"+safe(CURRENT_TENNIS.players[0].name)+"-vs-"+safe(CURRENT_TENNIS.players[1].name)+".png";canvas.toBlob(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);},'image/png');}
-  function currentAccent(){return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()||"#e07b3e";}
-  function hexToRgb(hex){const h=hex.replace("#","");return parseInt(h.substring(0,2),16)+","+parseInt(h.substring(2,4),16)+","+parseInt(h.substring(4,6),16);}
-  function roundRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
-  async function renderShareCanvas(){if(!CURRENT_TENNIS)return;if(document.fonts&&document.fonts.ready){try{await document.fonts.ready;}catch(e){}}const canvas=$("shareCanvas");const ctx=canvas.getContext("2d");const W=1080,H=1350;const accent=currentAccent();const accentRgb=hexToRgb(accent);const match=CURRENT_TENNIS;const p1=match.players[0],p2=match.players[1];const wp=winProbabilities(p1,p2);const p1Leads=wp.p1>=wp.p2;const leader=p1Leads?p1:p2;const leaderPct=p1Leads?wp.p1:wp.p2;ctx.fillStyle="#0b0d0f";ctx.fillRect(0,0,W,H);const glow=ctx.createRadialGradient(W-120,60,60,W-120,60,720);glow.addColorStop(0,"rgba("+accentRgb+",0.30)");glow.addColorStop(1,"rgba("+accentRgb+",0)");ctx.fillStyle=glow;ctx.fillRect(0,0,W,H);ctx.fillStyle=accent;ctx.fillRect(0,0,W,8);const M=80;ctx.textBaseline="alphabetic";ctx.fillStyle=accent;ctx.beginPath();ctx.arc(M+9,92,12,0,Math.PI*2);ctx.fill();ctx.fillStyle="#f4f6f7";ctx.font="700 40px 'Space Grotesk', sans-serif";ctx.textAlign="left";ctx.fillText("BREAK",M+32,105);ctx.fillStyle="#8a929b";ctx.font="600 24px 'Space Grotesk', sans-serif";ctx.fillText(String(match.tournament).toUpperCase(),M,160);function fmtScores(scores){return scores.join("  ");}ctx.font="700 50px 'Space Grotesk', sans-serif";ctx.fillStyle=p1Leads?"#f4f6f7":"#8a929b";ctx.textAlign="left";ctx.fillText(p1.name,M,270);ctx.textAlign="right";ctx.fillStyle="#f4f6f7";ctx.font="600 44px 'Space Grotesk', sans-serif";ctx.fillText(fmtScores(p1.set_scores),W-M,270);ctx.font="700 50px 'Space Grotesk', sans-serif";ctx.fillStyle=p1Leads?"#8a929b":"#f4f6f7";ctx.textAlign="left";ctx.fillText(p2.name,M,340);ctx.textAlign="right";ctx.fillStyle="#f4f6f7";ctx.font="600 44px 'Space Grotesk', sans-serif";ctx.fillText(fmtScores(p2.set_scores),W-M,340);ctx.textAlign="center";ctx.fillStyle="#8a929b";ctx.font="600 26px 'Space Grotesk', sans-serif";ctx.fillText("WIN PROBABILITY",W/2,470);ctx.fillStyle=accent;ctx.font="700 210px 'Space Grotesk', sans-serif";ctx.fillText(leaderPct+"%",W/2,660);ctx.fillStyle="#f4f6f7";ctx.font="600 36px 'Space Grotesk', sans-serif";ctx.fillText(leader.name+" to win",W/2,730);const barX=M,barY=800,barW=W-M*2,barH=26;ctx.fillStyle="rgba(255,255,255,0.08)";roundRect(ctx,barX,barY,barW,barH,barH/2);ctx.fill();const fillW=Math.max(barH,barW*(wp.p1/100));const barGrad=ctx.createLinearGradient(barX,0,barX+barW,0);barGrad.addColorStop(0,"rgba("+accentRgb+",0.55)");barGrad.addColorStop(1,accent);ctx.fillStyle=barGrad;roundRect(ctx,barX,barY,fillW,barH,barH/2);ctx.fill();ctx.fillStyle="rgba(255,255,255,0.45)";ctx.fillRect(barX+barW/2-1,barY,2,barH);const ds=match.deep_stats||{};const serveStats=ds.serve_stats||{};const bpStats=ds.break_point_stats||{};const firstServe=serveStats.first_serve_percentage!=null?serveStats.first_serve_percentage:Math.round((p1.firstServePct+p2.firstServePct)/2);const aces=serveStats.aces!=null?serveStats.aces:(p1.aces+p2.aces);const bpSaved=bpStats.break_points_saved!=null?bpStats.break_points_saved:(p1.bpSaved+p2.bpSaved);const stats=[{label:"1ST SERVE %",value:firstServe+"%"},{label:"ACES",value:String(aces)},{label:"BP SAVED",value:String(bpSaved)}];const colY=1020;stats.forEach((s,i)=>{const cx=M+(barW/3)*(i+0.5);ctx.textAlign="center";ctx.fillStyle="#f4f6f7";ctx.font="700 72px 'Space Grotesk', sans-serif";ctx.fillText(s.value,cx,colY);ctx.fillStyle="#8a929b";ctx.font="600 22px 'Space Grotesk', sans-serif";ctx.fillText(s.label,cx,colY+44);});ctx.strokeStyle="rgba(255,255,255,0.08)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(M,1200);ctx.lineTo(W-M,1200);ctx.stroke();const stamp=new Date().toLocaleString();ctx.textAlign="left";ctx.fillStyle="#8a929b";ctx.font="500 24px 'Space Grotesk', sans-serif";ctx.fillText("Updated "+stamp,M,1260);ctx.textAlign="right";ctx.fillStyle=accent;ctx.font="600 24px 'Space Grotesk', sans-serif";ctx.fillText("BREAK · momentum tracker",W-M,1260);}
-  $("twitterBtn").addEventListener("click",()=>{if(currentSport==="tennis"&&CURRENT_TENNIS){const p1=CURRENT_TENNIS.players[0],p2=CURRENT_TENNIS.players[1];const wp=winProbabilities(p1,p2);const leader=wp.p1>=wp.p2?p1.name:p2.name;const other=wp.p1>=wp.p2?p2.name:p1.name;const text=leader+" def. "+other+" — "+CURRENT_TENNIS.tournament+" momentum breakdown via Break 🎾";window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(text),"_blank","noopener");}else if(currentSport==="football"&&CURRENT_FOOTBALL){const m=CURRENT_FOOTBALL;const text=m.homeTeam.name+" vs "+m.awayTeam.name+" — World Cup 2026 on Break ⚽";window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(text),"_blank","noopener");}});
-  $("copyBtn").addEventListener("click",()=>{const btn=$("copyBtn");const done=()=>{const old=btn.textContent;btn.textContent="Copied!";setTimeout(()=>{btn.textContent=old;},1500);};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(location.href).then(done).catch(done);}else{done();}});
-  $("shareGotoMatches").addEventListener("click",()=>showTab("matches"));
-  $("backToMatches").addEventListener("click",()=>showTab("matches"));
-  $("heroBrowseBtn").addEventListener("click",()=>showTab("matches"));
-  $("exampleViewBtn").addEventListener("click",()=>{loadMatch(FALLBACK_DATA.matches[0]);showTab("analysis");});
-  $("featuredCard").addEventListener("click",()=>{loadMatch(FALLBACK_DATA.matches[0]);showTab("analysis");});
-  $("wpHelp").addEventListener("click",e=>{e.stopPropagation();$("wpTooltip").classList.toggle("show");});
-  document.addEventListener("click",e=>{if(!e.target.closest(".wp-head"))$("wpTooltip").classList.remove("show");});
-  // ═══════════════════════════════════════════════════════════
-  //  INIT
-  // ═══════════════════════════════════════════════════════════
-  async function init(){setSport(currentSport);updateNowBar();if(currentSport==="football"){await fetchFootballMatches();}showTab("home");}
+  const LIVE_API_HEADERS = {
+    "x-rapidapi-key": "cf9e49b00amshb6126622a1dd5aep18a720jsn1ee2048ea169",
+    "x-rapidapi-host": "tennis-api-atp-wta-itf.p.rapidapi.com"
+  };
+
+  function firstOf(obj, keys) {
+    if (!obj) return undefined;
+    for (let i = 0; i < keys.length; i++) if (obj[keys[i]] !== undefined && obj[keys[i]] !== null) return obj[keys[i]];
+    return undefined;
+  }
+  function findEventsArray(data) {
+    if (Array.isArray(data)) return data;
+    const c = firstOf(data, ["data", "events", "results", "matches", "response", "result"]);
+    if (Array.isArray(c)) return c;
+    if (c && typeof c === "object") {
+      const inner = firstOf(c, ["events", "results", "matches", "data"]);
+      if (Array.isArray(inner)) return inner;
+    }
+    return [];
+  }
+  function readName(team) {
+    if (!team) return null;
+    if (typeof team === "string") return team;
+    const n = firstOf(team, ["name", "fullName", "player", "shortName", "title"]);
+    return n ? String(n) : null;
+  }
+  function readSetScores(scoreObj) {
+    if (!scoreObj) return [];
+    if (Array.isArray(scoreObj)) return scoreObj.map(Number).filter(function (n) { return !isNaN(n); });
+    const sets = [];
+    for (let i = 1; i <= 5; i++) {
+      const v = firstOf(scoreObj, ["period" + i, "set" + i, "s" + i]);
+      if (v !== undefined && v !== null && !isNaN(Number(v))) sets.push(Number(v));
+    }
+    return sets;
+  }
+  function readNames(ev) {
+    const home = firstOf(ev, ["homeTeam", "home", "player1", "firstPlayer", "team1", "p1"]);
+    const away = firstOf(ev, ["awayTeam", "away", "player2", "secondPlayer", "team2", "p2"]);
+    let n1 = readName(home), n2 = readName(away);
+    if ((!n1 || !n2) && Array.isArray(ev.teams) && ev.teams.length >= 2) {
+      n1 = n1 || readName(ev.teams[0]); n2 = n2 || readName(ev.teams[1]);
+    }
+    n1 = n1 || (typeof ev.event_first_player === "string" ? ev.event_first_player : null);
+    n2 = n2 || (typeof ev.event_second_player === "string" ? ev.event_second_player : null);
+    return [n1, n2];
+  }
+  function readTournament(ev) {
+    return firstOf(ev, ["tournamentName"]) ||
+           readName(firstOf(ev, ["tournament", "league", "competition", "season"])) || "";
+  }
+
+  // A live event → a fully-analysable match object (no deep stats though).
+  function mapLiveEventToMatch(ev) {
+    const names = readNames(ev);
+    if (!names[0] || !names[1]) return null;
+    const homeScore = firstOf(ev, ["homeScore", "scoreHome", "score1", "homeSets", "p1Score"]);
+    const awayScore = firstOf(ev, ["awayScore", "scoreAway", "score2", "awaySets", "p2Score"]);
+    return {
+      tournament: String(readTournament(ev) || "Live Tennis"),
+      match_name: names[0] + " vs " + names[1],
+      status: String(firstOf(ev, ["statusText", "status", "round", "roundName"]) || "Live"),
+      isLive: true,
+      detailed: false,
+      players: [
+        { name: names[0], set_scores: readSetScores(homeScore), firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] },
+        { name: names[1], set_scores: readSetScores(awayScore), firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] }
+      ]
+    };
+  }
+
+  // A fixture event → a lightweight browse object (+ a match for tap-to-analyse).
+  function mapFixture(ev, dayOffset, completed) {
+    const names = readNames(ev);
+    if (!names[0] || !names[1]) return null;
+    const tournament = readTournament(ev);
+    const round = firstOf(ev, ["round", "roundName", "tournament_round"]) || "";
+    const cls = classifyTournament(tournament);
+      // The API returns a UTC ISO timestamp in the "date" field, e.g. "2026-06-13T21:00:00.000Z"
+    const utcTime = firstOf(ev, ["date", "startTime", "scheduled", "scheduledTime", "time", "matchTime", "start", "event_time"]);
+    let clockStr = null;
+    let startLocal = null;
+    if (typeof utcTime === "string") {
+      const d = new Date(utcTime);
+      if (!isNaN(d.getTime())) {
+        startLocal = d;
+        clockStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      } else {
+        const m = utcTime.trim().match(/^(\d{1,2}):(\d{2})$/);
+        if (m) clockStr = prettyClock(utcTime);
+      }
+    }
+
+    let sub = "";
+    if (tournament && round) sub = tournament + " · " + round;
+    else if (tournament) sub = String(tournament);
+    else if (round) sub = String(round);
+
+    return {
+      players: names[0] + " vs " + names[1],
+      p1: names[0], p2: names[1],
+      tournament: tournament || "Tennis",
+      round: round,
+      sub: sub,
+      tier: cls.tier,
+      badge: cls.badge,
+      roundRank: roundRank(round),
+      surfaceEmoji: surfaceEmoji(tournament),
+       clockLabel: clockStr,
+      startLocal: startLocal || clockToLocalDate(clockStr, dayOffset),
+      completed: !!completed,
+      // The match object used if the user taps to analyse this fixture.
+      match: {
+        tournament: tournament || "Tennis",
+        match_name: names[0] + " vs " + names[1],
+        status: completed ? "Completed" : "Upcoming",
+        isLive: false,
+        detailed: false,
+        players: [
+          { name: names[0], set_scores: [], firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] },
+          { name: names[1], set_scores: [], firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] }
+        ]
+      }
+    };
+  }
+
+  async function fetchFixtures(dayOffset, completed) {
+    const res = await fetch(FIXTURES_BASE + dateString(dayOffset), { headers: LIVE_API_HEADERS });
+    if (!res.ok) throw new Error("Fixtures status " + res.status);
+    const data = await res.json();
+    const events = findEventsArray(data);
+    const out = [];
+    for (let i = 0; i < events.length; i++) {
+      const f = mapFixture(events[i], dayOffset, completed);
+      if (f) out.push(f);
+    }
+    return out;
+  }
+
+  /* ===========================================================
+     STEP 8 — TAB NAVIGATION
+     =========================================================== */
+  let activeTab = "home";
+  const navButtons = document.querySelectorAll(".navbtn");
+
+  function showTab(name) {
+    activeTab = name;
+    document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
+    $("tab-" + name).classList.add("active");
+
+    navButtons.forEach(function (btn) {
+      const on = btn.getAttribute("data-tab") === name;
+      btn.classList.toggle("active", on);
+      if (on) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+    });
+
+    // Now bar only on Home + Matches.
+    $("nowbar").classList.toggle("hidden", !(name === "home" || name === "matches"));
+
+    if (name === "share") drawSharePreview();
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  navButtons.forEach(function (btn) {
+    btn.addEventListener("click", function () { showTab(btn.getAttribute("data-tab")); });
+  });
+
+  /* ===========================================================
+     STEP 9 — GRAND SLAM COUNTDOWN
+     =========================================================== */
+  const SLAMS = [
+    { name: "Roland-Garros",    emoji: "🎾", surface: "clay",  start: "2026-05-24", end: "2026-06-07" },
+    { name: "Wimbledon",        emoji: "🌱", surface: "grass", start: "2026-06-29", end: "2026-07-12" },
+    { name: "US Open",          emoji: "🏟️", surface: "hard",  start: "2026-08-24", end: "2026-09-13" },
+    { name: "Australian Open",  emoji: "🏟️", surface: "hard",  start: "2027-01-18", end: "2027-02-01" },
+    { name: "Roland-Garros",    emoji: "🎾", surface: "clay",  start: "2027-05-23", end: "2027-06-06" }
+  ];
+  function parseYMD(s) { const p = s.split("-"); return new Date(+p[0], +p[1]-1, +p[2]); }
+  function fmtDate(d) {
+    return d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+  }
+  // Returns { slam, daysUntil, isLive, progress, prevEnd }.
+  function nextSlamInfo() {
+    const now = new Date();
+    // Is one live right now?
+    for (let i = 0; i < SLAMS.length; i++) {
+      const s = SLAMS[i], st = parseYMD(s.start), en = parseYMD(s.end);
+      en.setHours(23, 59, 59);
+      if (now >= st && now <= en) return { slam: s, isLive: true, daysUntil: 0, progress: 1 };
+    }
+    // Otherwise the next upcoming one.
+    for (let i = 0; i < SLAMS.length; i++) {
+      const s = SLAMS[i], st = parseYMD(s.start);
+      if (st > now) {
+        const prevEnd = i > 0 ? parseYMD(SLAMS[i-1].end) : new Date(now.getTime() - 86400000);
+        const span = st.getTime() - prevEnd.getTime();
+        const elapsed = now.getTime() - prevEnd.getTime();
+        const progress = Math.max(0, Math.min(1, elapsed / span));
+        const days = Math.ceil((st.getTime() - now.getTime()) / 86400000);
+        return { slam: s, isLive: false, daysUntil: days, progress: progress };
+      }
+    }
+    return { slam: SLAMS[SLAMS.length - 1], isLive: false, daysUntil: 0, progress: 1 };
+  }
+  function renderGrandSlam() {
+    const info = nextSlamInfo();
+    const s = info.slam;
+    $("gsEmoji").textContent = s.emoji;
+    $("gsName").textContent = s.name;
+    $("gsDate").textContent = fmtDate(parseYMD(s.start));
+    const countEl = $("gsCount");
+    if (info.isLive) {
+      countEl.textContent = "LIVE NOW";
+      countEl.classList.add("live");
+    } else {
+      countEl.classList.remove("live");
+      countEl.textContent = info.daysUntil <= 0 ? "Today" :
+        info.daysUntil === 1 ? "Starts tomorrow" : info.daysUntil + " days";
+    }
+    $("gsProgress").style.width = (info.progress * 100) + "%";
+    return info;
+  }
+
+  /* ===========================================================
+     STEP 10 — NOW BAR
+     =========================================================== */
+  function renderNowBar(liveMatches, gsInfo) {
+    const dot = $("nowDot"), text = $("nowText");
+    const liveCount = liveMatches ? liveMatches.length : 0;
+    if (gsInfo && gsInfo.isLive) {
+      dot.classList.remove("hidden");
+      text.textContent = "● " + gsInfo.slam.name + " is underway" +
+        (liveCount ? " · " + liveCount + " matches live" : "");
+      $("brandLive").classList.remove("hidden");
+    } else if (liveCount > 0) {
+      dot.classList.remove("hidden");
+      text.textContent = liveCount + (liveCount === 1 ? " match live" : " matches live");
+      $("brandLive").classList.add("hidden");
+    } else {
+      dot.classList.add("hidden");
+      $("brandLive").classList.add("hidden");
+      const days = gsInfo ? gsInfo.daysUntil : 0;
+      text.textContent = (days > 0 ? gsInfo.slam.name + " starts in " + days + " day" + (days === 1 ? "" : "s") + " · " : "") +
+        "No live matches right now";
+    }
+  }
+
+  /* ===========================================================
+     STEP 11 — FEATURED MATCH (Home)
+     =========================================================== */
+  function renderFeatured(match) {
+    const p1 = match.players[0], p2 = match.players[1];
+    const wp = winProbabilities(p1, p2);
+    const p1Leads = wp.p1 >= wp.p2;
+    $("featTournament").textContent = match.tournament;
+    $("featName1").textContent = p1.name;
+    $("featName2").textContent = p2.name;
+    $("featName1").classList.toggle("dim", !p1Leads);
+    $("featName2").classList.toggle("dim", p1Leads);
+    $("featScores1").innerHTML = p1.set_scores.map(function (g) { return "<span>" + g + "</span>"; }).join("");
+    $("featScores2").innerHTML = p2.set_scores.map(function (g) { return "<span>" + g + "</span>"; }).join("");
+  }
+
+  /* ===========================================================
+     STEP 12 — TODAY'S MATCHES (Home, horizontal)
+     =========================================================== */
+  const HOME_FILTERS = ["All", "ATP", "Grand Slams", "Challenger", "ITF"];
+  let homeFilter = "All";
+  let todayMatches = [];
+  let homeCountdownTimer = null;
+
+  function buildPills(container, filters, current, onPick) {
+    container.innerHTML = filters.map(function (f) {
+      return '<button class="pill' + (f === current ? " active" : "") + '" role="tab" aria-selected="' +
+             (f === current) + '">' + escapeHtml(f) + '</button>';
+    }).join("");
+    Array.prototype.forEach.call(container.querySelectorAll(".pill"), function (btn, i) {
+      btn.addEventListener("click", function () { onPick(filters[i]); });
+    });
+  }
+function matchPassesFilter(m, filter) {
+    // Tournament names aren't available from the API yet (only IDs),
+    // so we show all matches under every filter until we add a name lookup.
+    return true;
+}
+
+function stopHomeCountdown() { if (homeCountdownTimer) { clearInterval(homeCountdownTimer); homeCountdownTimer = null; } }
+
+  function renderToday() {
+    const scroll = $("todayScroll"), empty = $("todayEmpty"), cd = $("todayCountdown");
+    const filtered = sortMatches(todayMatches.filter(function (m) { return matchPassesFilter(m, homeFilter); }));
+    $("todayCount").textContent = todayMatches.length ? "(" + todayMatches.length + ")" : "";
+
+    stopHomeCountdown();
+
+    if (filtered.length === 0) {
+      scroll.classList.add("hidden");
+      cd.innerHTML = "";
+      empty.classList.remove("hidden");
+      empty.innerHTML =
+        '<div class="empty"><div class="empty-ball" aria-hidden="true">🎾</div>' +
+        '<div class="empty-title">No matches scheduled today</div>' +
+        '<div class="empty-sub">Check the next Grand Slam below.</div></div>';
+      return;
+    }
+
+    empty.classList.add("hidden");
+    scroll.classList.remove("hidden");
+
+    // Countdown to the soonest upcoming match.
+    const now = Date.now();
+    let nextStart = null;
+    filtered.forEach(function (m) {
+      if (m.startLocal && m.startLocal.getTime() > now && (!nextStart || m.startLocal < nextStart)) nextStart = m.startLocal;
+    });
+    if (nextStart) {
+      cd.innerHTML = '<span class="countdown-badge"><span class="pulse-dot" aria-hidden="true"></span><span id="todayCdText"></span></span>';
+      const tick = function () {
+        const el = $("todayCdText");
+        if (!el) { stopHomeCountdown(); return; }
+        el.textContent = countdownText(nextStart);
+      };
+      tick();
+      homeCountdownTimer = setInterval(tick, 60000);
+    } else {
+      cd.innerHTML = "";
+    }
+
+    const HOUR = 3600000;
+    scroll.innerHTML = filtered.map(function (m, i) {
+      const soon = m.startLocal && m.startLocal.getTime() > now && (m.startLocal.getTime() - now) <= HOUR;
+      const dot = badgeDotHtml(m.badge) || (soon ? '<span class="dot dot-soon" aria-hidden="true"></span>' : "");
+      const timeLabel = m.clockLabel ? m.clockLabel : "TBD";
+      return '<div class="hcard" role="button" tabindex="0" data-idx="' + i + '">' +
+               '<div class="hcard-top">' + dot + '<span class="hcard-tour">' + escapeHtml(m.tournament) + '</span></div>' +
+               '<div class="hcard-players">' + escapeHtml(m.players) + '</div>' +
+               '<div class="hcard-time">' + m.surfaceEmoji + ' ' + escapeHtml(timeLabel) + '</div>' +
+             '</div>';
+    }).join("");
+
+    Array.prototype.forEach.call(scroll.querySelectorAll(".hcard"), function (card) {
+      const idx = +card.getAttribute("data-idx");
+      const open = function () { loadMatch(filtered[idx].match); showTab("analysis"); };
+      card.addEventListener("click", open);
+      card.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    });
+  }
+
+  function showTodaySkeleton() {
+    $("todayEmpty").classList.add("hidden");
+    $("todayScroll").classList.remove("hidden");
+    $("todayScroll").innerHTML = "";
+    for (let i = 0; i < 4; i++) $("todayScroll").innerHTML += '<div class="skeleton sk-hcard"></div>';
+  }
+
+  /* ===========================================================
+     STEP 13 — MATCHES TAB (upcoming + recent vertical lists)
+     =========================================================== */
+  const MATCH_FILTERS = ["All", "ATP", "WTA", "Grand Slams", "Challenger", "ITF"];
+  let matchFilter = "All";
+  let upcomingMatches = [];
+  let recentMatches = [];
+
+  function renderMatchList(container, list, emptyEl, emptyHtml) {
+    const sorted = sortMatches(list);
+    if (sorted.length === 0) {
+      container.innerHTML = "";
+      emptyEl.classList.remove("hidden");
+      emptyEl.innerHTML = emptyHtml;
+      bindEmptyButtons(emptyEl);
+      return;
+    }
+    emptyEl.classList.add("hidden");
+    container.innerHTML = sorted.map(function (m, i) {
+      const timeHtml = m.clockLabel
+        ? escapeHtml(m.clockLabel) + ' <span class="no-time" style="display:block;font-size:10px;">venue local</span>'
+        : '<span class="no-time">TBD</span>';
+      return '<div class="mcard" role="button" tabindex="0" data-idx="' + i + '">' +
+               badgeDotHtml(m.badge) +
+               '<span class="mcard-tag">' + escapeHtml(m.tournament.split(" ")[0]) + '</span>' +
+               '<div class="mcard-body">' +
+                 '<div class="mcard-players">' + escapeHtml(m.players) + '</div>' +
+                 '<div class="mcard-sub">' + m.surfaceEmoji + ' ' + escapeHtml(m.sub) + '</div>' +
+               '</div>' +
+               '<div class="mcard-time">' + timeHtml + '</div>' +
+             '</div>';
+    }).join("");
+    Array.prototype.forEach.call(container.querySelectorAll(".mcard"), function (card) {
+      const idx = +card.getAttribute("data-idx");
+      const open = function () { loadMatch(sorted[idx].match); showTab("analysis"); };
+      card.addEventListener("click", open);
+      card.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    });
+  }
+
+  function bindEmptyButtons(scope) {
+    const refresh = scope.querySelector("[data-action='refresh']");
+    if (refresh) refresh.addEventListener("click", refreshAll);
+    const classic = scope.querySelector("[data-action='classic']");
+    if (classic) classic.addEventListener("click", function () { loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); });
+  }
+
+  function renderUpcoming() {
+    const filtered = upcomingMatches.filter(function (m) { return matchPassesFilter(m, matchFilter); });
+    renderMatchList($("upcomingList"), filtered, $("upcomingEmpty"),
+      '<div class="empty"><div class="empty-ball" aria-hidden="true">🎾</div>' +
+      '<div class="empty-title">No upcoming matches found</div>' +
+      '<button class="btn btn-outline" data-action="refresh">Refresh</button></div>');
+  }
+  function renderRecent() {
+    renderMatchList($("recentList"), recentMatches, $("recentEmpty"),
+      '<div class="empty"><div class="empty-ball" aria-hidden="true">🎾</div>' +
+      '<div class="empty-title">No recent matches found</div>' +
+      '<div class="empty-sub">Revisit a classic instead.</div>' +
+      '<button class="btn btn-outline" data-action="classic">View this classic final</button></div>');
+  }
+
+  function showListSkeleton(container, n) {
+    container.innerHTML = "";
+    for (let i = 0; i < n; i++) container.innerHTML += '<div class="skeleton sk-mcard"></div>';
+  }
+
+  // Matches sub-tabs
+  $("subUpcoming").addEventListener("click", function () {
+    $("subUpcoming").classList.add("active"); $("subRecent").classList.remove("active");
+    $("upcomingView").classList.remove("hidden"); $("recentView").classList.add("hidden");
+  });
+  $("subRecent").addEventListener("click", function () {
+    $("subRecent").classList.add("active"); $("subUpcoming").classList.remove("active");
+    $("recentView").classList.remove("hidden"); $("upcomingView").classList.add("hidden");
+    if (recentMatches.length === 0) loadRecent();
+  });
+
+  /* ===========================================================
+     STEP 14 — ANALYSIS RENDER
+     =========================================================== */
+  function loadMatch(match) {
+    CURRENT = match;
+    renderAnalysis(match);
+  }
+  function statusPillHtml(match) {
+    if (match.isLive) return '<span class="live-dot" aria-hidden="true"></span>Live';
+    if (/complete/i.test(match.status)) return "Completed";
+    if (/upcoming/i.test(match.status)) return "Upcoming";
+    return escapeHtml(match.status || "Match");
+  }
+  function noStatsMsg() {
+    return '<div class="card-msg"><b>Detailed stats unavailable for this match</b>' +
+           'Full analysis is available for completed matches with hardcoded or scraped data.</div>';
+  }
+
+  function renderAnalysis(match) {
+    const p1 = match.players[0], p2 = match.players[1];
+
+    $("anStatus").innerHTML = statusPillHtml(match);
+    $("anTournament").textContent = match.tournament;
+    $("anMatch").textContent = match.match_name;
+    // Scoreline (if any sets present).
+    if (p1.set_scores.length) {
+      const line = p1.set_scores.map(function (g, i) { return g + "-" + (p2.set_scores[i] != null ? p2.set_scores[i] : "?"); }).join("  ");
+      $("anScoreline").textContent = line;
+    } else {
+      $("anScoreline").textContent = "";
+    }
+
+    // If a match has no detailed stats, show messages instead of empty boxes.
+    if (match.detailed === false) {
+      $("wpBody").innerHTML = noStatsMsg();
+      $("pressureBody").innerHTML = noStatsMsg();
+      $("serveBody").innerHTML = noStatsMsg();
+      return;
+    }
+
+    // --- Win probability ---
+    const wp = winProbabilities(p1, p2);
+    const p1Leads = wp.p1 >= wp.p2;
+    $("wpBody").innerHTML =
+      '<div class="wp-row">' +
+        '<div class="wp-side left"><div class="wp-name">' + escapeHtml(p1.name) + '</div>' +
+          '<div class="wp-pct' + (p1Leads ? " lead" : "") + '">' + wp.p1 + '%</div></div>' +
+        '<div class="wp-side right"><div class="wp-name">' + escapeHtml(p2.name) + '</div>' +
+          '<div class="wp-pct' + (!p1Leads ? " lead" : "") + '">' + wp.p2 + '%</div></div>' +
+      '</div>' +
+      '<div class="momentum"><div class="momentum-fill" id="momFill"></div><div class="momentum-center"></div></div>' +
+      '<div class="wp-foot"><span>' + escapeHtml(p1.name) + '</span><span>' + escapeHtml(p2.name) + '</span></div>';
+    // Animate the fill on the next frame.
+    requestAnimationFrame(function () { const f = $("momFill"); if (f) f.style.width = wp.p1 + "%"; });
+
+    // --- Pressure ---
+    const pr1 = pressureScore(p1, wp.p1), pr2 = pressureScore(p2, wp.p2);
+    $("pressureBody").innerHTML = [[p1, pr1], [p2, pr2]].map(function (pair) {
+      const player = pair[0], score = pair[1];
+      const label = pressureLabel(score), dotc = pressureDotClass(score);
+      return '<div class="pressure-item">' +
+               '<div class="pressure-top"><span class="pressure-name">' + escapeHtml(player.name) + '</span>' +
+               '<span class="pressure-status"><span class="pdot ' + dotc + '" aria-hidden="true"></span><b>' + label + '</b> · ' + score + '</span></div>' +
+               '<div class="pbar"><div class="pbar-fill" data-w="' + score + '"></div></div>' +
+             '</div>';
+    }).join("");
+    requestAnimationFrame(function () {
+      Array.prototype.forEach.call(document.querySelectorAll("#pressureBody .pbar-fill"), function (el) {
+        el.style.width = el.getAttribute("data-w") + "%";
+      });
+    });
+
+    // --- Serve trend ---
+    $("serveBody").innerHTML = [p1, p2].map(function (player) {
+      const dir = serveDirection(player.serveTrend);
+      const cls = dir === "Improving" ? "up" : dir === "Dipping" ? "down" : "steady";
+      const arrow = dir === "Improving" ? "▲" : dir === "Dipping" ? "▼" : "→";
+      return '<div class="serve-item">' +
+               '<div class="serve-top"><span class="serve-name">' + escapeHtml(player.name) + '</span>' +
+               '<span class="serve-dir ' + cls + '">' + arrow + ' ' + dir + '</span></div>' +
+               buildServeChart(player.serveTrend) +
+             '</div>';
+    }).join("");
+  }
+
+  // Win-probability "?" tooltip.
+  $("wpHelp").addEventListener("click", function (e) {
+    e.stopPropagation();
+    $("wpTooltip").classList.toggle("show");
+  });
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest(".wp-head")) $("wpTooltip").classList.remove("show");
+  });
+
+  $("backToMatches").addEventListener("click", function () { showTab("matches"); });
+  $("featuredCard").addEventListener("click", function () { loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); });
+  $("featuredCard").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); }
+  });
+
+  // Hero "Browse matches →" button.
+  $("heroBrowseBtn").addEventListener("click", function () { showTab("matches"); });
+
+  // Example match breakdown — "View full analysis →" link.
+  $("exampleViewBtn").addEventListener("click", function () {
+    loadMatch(FALLBACK_DATA.matches[0]);
+    showTab("analysis");
+  });
+
+  /* ===========================================================
+     STEP 15 — SHARE CANVAS (preserved premium 1080x1350 card)
+     =========================================================== */
+  function currentAccent() {
+    return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#e07b3e";
+  }
+  function hexToRgb(hex) {
+    const h = hex.replace("#", "");
+    return parseInt(h.substring(0,2),16) + "," + parseInt(h.substring(2,4),16) + "," + parseInt(h.substring(4,6),16);
+  }
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  async function renderShareCanvas() {
+    if (!CURRENT) return;
+    if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch (e) {} }
+
+    const canvas = $("shareCanvas");
+    const ctx = canvas.getContext("2d");
+    const W = 1080, H = 1350;
+    const accent = currentAccent();
+    const accentRgb = hexToRgb(accent);
+    const match = CURRENT;
+    const p1 = match.players[0], p2 = match.players[1];
+    const wp = winProbabilities(p1, p2);
+    const p1Leads = wp.p1 >= wp.p2;
+    const leader = p1Leads ? p1 : p2;
+    const leaderPct = p1Leads ? wp.p1 : wp.p2;
+
+    ctx.fillStyle = "#0b0d0f";
+    ctx.fillRect(0, 0, W, H);
+    const glow = ctx.createRadialGradient(W - 120, 60, 60, W - 120, 60, 720);
+    glow.addColorStop(0, "rgba(" + accentRgb + ",0.30)");
+    glow.addColorStop(1, "rgba(" + accentRgb + ",0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = accent;
+    ctx.fillRect(0, 0, W, 8);
+
+    const M = 80;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = accent;
+    ctx.beginPath(); ctx.arc(M + 9, 92, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#f4f6f7";
+    ctx.font = "700 40px 'Space Grotesk', sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("BREAK", M + 32, 105);
+
+    ctx.fillStyle = "#8a929b";
+    ctx.font = "600 24px 'Space Grotesk', sans-serif";
+    ctx.fillText(String(match.tournament).toUpperCase(), M, 160);
+
+    function fmtScores(scores) { return scores.join("  "); }
+    ctx.font = "700 50px 'Space Grotesk', sans-serif";
+    ctx.fillStyle = p1Leads ? "#f4f6f7" : "#8a929b";
+    ctx.textAlign = "left"; ctx.fillText(p1.name, M, 270);
+    ctx.textAlign = "right"; ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 44px 'Space Grotesk', sans-serif"; ctx.fillText(fmtScores(p1.set_scores), W - M, 270);
+
+    ctx.font = "700 50px 'Space Grotesk', sans-serif";
+    ctx.fillStyle = p1Leads ? "#8a929b" : "#f4f6f7";
+    ctx.textAlign = "left"; ctx.fillText(p2.name, M, 340);
+    ctx.textAlign = "right"; ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 44px 'Space Grotesk', sans-serif"; ctx.fillText(fmtScores(p2.set_scores), W - M, 340);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#8a929b";
+    ctx.font = "600 26px 'Space Grotesk', sans-serif";
+    ctx.fillText("WIN PROBABILITY", W / 2, 470);
+    ctx.fillStyle = accent;
+    ctx.font = "700 210px 'Space Grotesk', sans-serif";
+    ctx.fillText(leaderPct + "%", W / 2, 660);
+    ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 36px 'Space Grotesk', sans-serif";
+    ctx.fillText(leader.name + " to win", W / 2, 730);
+
+    const barX = M, barY = 800, barW = W - M * 2, barH = 26;
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    roundRect(ctx, barX, barY, barW, barH, barH / 2); ctx.fill();
+    const fillW = Math.max(barH, barW * (wp.p1 / 100));
+    const barGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+    barGrad.addColorStop(0, "rgba(" + accentRgb + ",0.55)");
+    barGrad.addColorStop(1, accent);
+    ctx.fillStyle = barGrad;
+    roundRect(ctx, barX, barY, fillW, barH, barH / 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.fillRect(barX + barW / 2 - 1, barY, 2, barH);
+
+    const ds = match.deep_stats || {};
+    const serveStats = ds.serve_stats || {};
+    const bpStats = ds.break_point_stats || {};
+    const firstServe = serveStats.first_serve_percentage != null ? serveStats.first_serve_percentage : Math.round((p1.firstServePct + p2.firstServePct) / 2);
+    const aces = serveStats.aces != null ? serveStats.aces : (p1.aces + p2.aces);
+    const bpSaved = bpStats.break_points_saved != null ? bpStats.break_points_saved : (p1.bpSaved + p2.bpSaved);
+    const stats = [
+      { label: "1ST SERVE %", value: firstServe + "%" },
+      { label: "ACES", value: String(aces) },
+      { label: "BP SAVED", value: String(bpSaved) }
+    ];
+    const colY = 1020;
+    stats.forEach(function (s, i) {
+      const cx = M + (barW / 3) * (i + 0.5);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#f4f6f7"; ctx.font = "700 72px 'Space Grotesk', sans-serif"; ctx.fillText(s.value, cx, colY);
+      ctx.fillStyle = "#8a929b"; ctx.font = "600 22px 'Space Grotesk', sans-serif"; ctx.fillText(s.label, cx, colY + 44);
+    });
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(M, 1200); ctx.lineTo(W - M, 1200); ctx.stroke();
+
+    const stamp = new Date().toLocaleString();
+    ctx.textAlign = "left"; ctx.fillStyle = "#8a929b"; ctx.font = "500 24px 'Space Grotesk', sans-serif";
+    ctx.fillText("Updated " + stamp, M, 1260);
+    ctx.textAlign = "right"; ctx.fillStyle = accent; ctx.font = "600 24px 'Space Grotesk', sans-serif";
+    ctx.fillText("BREAK · momentum tracker", W - M, 1260);
+  }
+
+  // Draw the canvas and place a scaled copy in the Share preview.
+  async function drawSharePreview() {
+    const loaded = $("shareLoaded"), empty = $("shareEmpty");
+    if (!CURRENT) { loaded.classList.add("hidden"); empty.classList.remove("hidden"); return; }
+    loaded.classList.remove("hidden"); empty.classList.add("hidden");
+    await renderShareCanvas();
+    const src = $("shareCanvas");
+    const preview = $("sharePreview");
+    preview.innerHTML = "";
+    const clone = document.createElement("canvas");
+    clone.width = src.width; clone.height = src.height;
+    clone.getContext("2d").drawImage(src, 0, 0);
+    preview.appendChild(clone);
+  }
+
+  async function downloadCard() {
+    if (!CURRENT) { showTab("share"); return; }
+    await renderShareCanvas();
+    const canvas = $("shareCanvas");
+    const safe = function (n) { return String(n).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); };
+    const filename = "break-" + safe(CURRENT.players[0].name) + "-vs-" + safe(CURRENT.players[1].name) + ".png";
+    canvas.toBlob(function (blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, "image/png");
+  }
+
+  $("downloadBtn").addEventListener("click", downloadCard);
+  $("twitterBtn").addEventListener("click", function () {
+    if (!CURRENT) return;
+    const p1 = CURRENT.players[0], p2 = CURRENT.players[1];
+    const wp = winProbabilities(p1, p2);
+    const leader = wp.p1 >= wp.p2 ? p1.name : p2.name;
+    const other = wp.p1 >= wp.p2 ? p2.name : p1.name;
+    const text = leader + " def. " + other + " — " + CURRENT.tournament + " momentum breakdown via Break 🎾";
+    window.open("https://twitter.com/intent/tweet?text=" + encodeURIComponent(text), "_blank", "noopener");
+  });
+  $("copyBtn").addEventListener("click", function () {
+    const btn = $("copyBtn");
+    const done = function () { const old = btn.textContent; btn.textContent = "Copied!"; setTimeout(function () { btn.textContent = old; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(location.href).then(done).catch(done);
+    } else { done(); }
+  });
+  $("shareGotoMatches").addEventListener("click", function () { showTab("matches"); });
+
+  /* ===========================================================
+     STEP 16 — DATA LOADING + REFRESH (live → fixtures → fallback)
+     =========================================================== */
+  let liveMatchesCache = [];
+
+  async function loadToday() {
+    showTodaySkeleton();
+    try {
+      todayMatches = await fetchFixtures(0, false);
+      if (todayMatches.length === 0) throw new Error("No fixtures today");
+    } catch (err) {
+      console.warn("Today fixtures failed:", err.message);
+      todayMatches = [];
+    }
+    renderToday();
+  }
+
+  async function loadUpcoming() {
+    showListSkeleton($("upcomingList"), 5);
+    try {
+      let list = await fetchFixtures(0, false);
+      if (list.length === 0) list = await fetchFixtures(1, false);
+      upcomingMatches = list;
+    } catch (err) {
+      console.warn("Upcoming fixtures failed:", err.message);
+      upcomingMatches = [];
+    }
+    renderUpcoming();
+  }
+
+  async function loadRecent() {
+    showListSkeleton($("recentList"), 5);
+    let list = [];
+    try {
+      const d1 = await fetchFixtures(-1, true);
+      const d2 = await fetchFixtures(-2, true);
+      list = d1.concat(d2);
+    } catch (err) {
+      console.warn("Recent fixtures failed:", err.message);
+      list = [];
+    }
+    recentMatches = list;
+    renderRecent();
+  }
+
+  async function tryLive() {
+    try {
+      const res = await fetch(LIVE_API_URL, { headers: LIVE_API_HEADERS });
+      if (!res.ok) throw new Error("Live status " + res.status);
+      const data = await res.json();
+      const events = findEventsArray(data);
+      const matches = [];
+      for (let i = 0; i < events.length; i++) {
+        const m = mapLiveEventToMatch(events[i]);
+        if (m) matches.push(m);
+      }
+      return matches;
+    } catch (err) {
+      console.warn("Live fetch failed:", err.message);
+      return [];
+    }
+  }
+
+  // Refresh button — pull-to-refresh visual + success/failure feedback.
+  const refreshBtn = $("refreshBtn");
+  async function refreshAll() {
+    $("ptr").classList.add("active");
+    const original = "🔄 Refresh live data";
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "Refreshing…";
+
+    let anySuccess = false;
+    try {
+      liveMatchesCache = await tryLive();
+      await loadToday();
+      await loadUpcoming();
+      anySuccess = todayMatches.length > 0 || upcomingMatches.length > 0 || liveMatchesCache.length > 0;
+    } catch (err) {
+      anySuccess = false;
+    }
+
+    const gsInfo = renderGrandSlam();
+    renderNowBar(liveMatchesCache, gsInfo);
+    renderHeroLive(gsInfo, liveMatchesCache);
+
+    $("ptr").classList.remove("active");
+    refreshBtn.disabled = false;
+    if (anySuccess) {
+      refreshBtn.textContent = "✓ Updated";
+      refreshBtn.style.color = "var(--accent)";
+      setTimeout(function () { refreshBtn.textContent = original; refreshBtn.style.color = ""; }, 1500);
+    } else {
+      refreshBtn.textContent = "✗ Couldn't refresh";
+      refreshBtn.style.color = "var(--red)";
+      showToast("Could not reach tennis data. Showing Roland-Garros final.");
+      setTimeout(function () { refreshBtn.textContent = original; refreshBtn.style.color = ""; }, 2000);
+    }
+  }
+  refreshBtn.addEventListener("click", refreshAll);
+
+  function renderHeroLive(gsInfo, liveMatches) {
+    const el = $("heroLive"), txt = $("heroLiveText");
+    if (gsInfo && gsInfo.isLive) {
+      el.classList.remove("hidden");
+      txt.textContent = "● " + gsInfo.slam.name + " LIVE";
+    } else {
+      el.classList.add("hidden");
+    }
+  }
+
+  /* ===========================================================
+     STEP 17 — INIT
+     =========================================================== */
+  function init() {
+    // Pills
+    buildPills($("homePills"), HOME_FILTERS, homeFilter, function (f) { homeFilter = f; buildPills($("homePills"), HOME_FILTERS, homeFilter, arguments.callee); renderToday(); });
+    buildPills($("matchPills"), MATCH_FILTERS, matchFilter, function (f) { matchFilter = f; buildPills($("matchPills"), MATCH_FILTERS, matchFilter, arguments.callee); renderUpcoming(); });
+
+    // Featured + default analysis/share use the Roland-Garros final.
+    renderFeatured(FALLBACK_DATA.matches[0]);
+    loadMatch(FALLBACK_DATA.matches[0]);
+
+    // Grand Slam + Now bar render immediately (no network needed).
+    const gsInfo = renderGrandSlam();
+    renderNowBar([], gsInfo);
+    renderHeroLive(gsInfo, []);
+
+    // Then attempt live data in the background (CORS may block it).
+    (async function () {
+      liveMatchesCache = await tryLive();
+      await loadToday();
+      await loadUpcoming();
+      const gs2 = renderGrandSlam();
+      renderNowBar(liveMatchesCache, gs2);
+      renderHeroLive(gs2, liveMatchesCache);
+      if (todayMatches.length === 0 && upcomingMatches.length === 0 && liveMatchesCache.length === 0) {
+        // Quietly fine — fallback UI already shows. Toast only on explicit refresh.
+      }
+    })();
+  }
+
   init();
   </script>
 </body>
