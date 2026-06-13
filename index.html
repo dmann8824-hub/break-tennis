@@ -1090,7 +1090,7 @@
     </section>
 
     <!-- Footer (shows under whichever tab is active) -->
-    <div class="footer">Data via RapidAPI · Times in venue local · Built by </div>
+<div class="footer">Data via RapidAPI · Times in venue local · Built by Daniel Mann</div>
   </main>
 
   <!-- ===== BOTTOM NAV ===== -->
@@ -1676,16 +1676,13 @@
       btn.addEventListener("click", function () { onPick(filters[i]); });
     });
   }
-  function matchPassesFilter(m, filter) {
-    if (filter === "All") return true;
-    if (filter === "Grand Slams") return m.tier === 1;
-    if (filter === "Challenger") return m.tier === 5;
-    if (filter === "ITF") return m.tier === 6;
-    if (filter === "ATP") return m.tier >= 1 && m.tier <= 4;
-    if (filter === "WTA") return true; // API is ATP fixtures; WTA shown as all
+function matchPassesFilter(m, filter) {
+    // Tournament names aren't available from the API yet (only IDs),
+    // so we show all matches under every filter until we add a name lookup.
     return true;
-  }
-  function stopHomeCountdown() { if (homeCountdownTimer) { clearInterval(homeCountdownTimer); homeCountdownTimer = null; } }
+}
+
+function stopHomeCountdown() { if (homeCountdownTimer) { clearInterval(homeCountdownTimer); homeCountdownTimer = null; } }
 
   function renderToday() {
     const scroll = $("todayScroll"), empty = $("todayEmpty"), cd = $("todayCountdown");
