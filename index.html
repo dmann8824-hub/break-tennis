@@ -404,6 +404,52 @@
     .refresh-status.live { color: var(--accent); }
 
     /* =========================================================
+       UPCOMING MATCHES (fixtures list)
+       Each row: matchup on the left, start time on the right,
+       with a thin divider between rows. Matches the dark theme.
+       ========================================================= */
+    .upcoming-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 0;
+      border-top: 1px solid var(--border);
+    }
+    .upcoming-item:first-child { border-top: none; }
+    .upcoming-match { min-width: 0; }
+    .upcoming-players {
+      font-size: 15px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* The little dot the accent color, sitting before "vs" feel. */
+    .upcoming-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .upcoming-time {
+      flex: none;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      text-align: right;
+    }
+    .upcoming-time .no-time { color: var(--muted); font-weight: 500; }
+    .upcoming-more {
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+      padding-top: 12px;
+    }
+
+    /* =========================================================
        LOADING STATE (pulsing gray placeholders)
        Shown while match_data.json is being fetched, then removed.
        ========================================================= */
@@ -551,6 +597,15 @@
           <div class="skeleton" style="width:100%;height:70px;margin:10px 0;"></div>
         </div>
         <div id="serveContent" class="hidden"></div>
+      </section>
+
+      <!-- ===== UPCOMING MATCHES (fixtures) ===== -->
+      <!-- Hidden by default. Appears under the main match display when a
+           live refresh finds no live matches, listing today's/tomorrow's
+           scheduled ATP fixtures so you know what's coming. -->
+      <section class="card hidden" id="upcomingCard">
+        <div class="label" id="upcomingLabel">Upcoming Matches</div>
+        <div id="upcomingContent"></div>
       </section>
 
       <!-- ===== DOWNLOAD SHARE CARD ===== -->
@@ -1082,6 +1137,9 @@
   async function refreshLiveData() {
     setRefreshLoading(true);
     setRefreshStatus("");
+    hideUpcoming(); // clear any previous fixtures list while we refresh
+
+    let foundLive = false;
 
     try {
       const res = await fetch(LIVE_API_URL, { headers: LIVE_API_HEADERS });
@@ -1100,6 +1158,7 @@
       if (liveMatch) {
         renderMatch(liveMatch);
         setRefreshStatus("● Live — " + liveMatch.match_name, true);
+        foundLive = true;
       } else {
         // API worked but had no usable live matches.
         throw new Error("No usable live matches");
@@ -1111,8 +1170,191 @@
       const fallback = pickMatch(FALLBACK_DATA);
       if (fallback) renderMatch(fallback);
       setRefreshStatus("No live matches right now — showing Roland-Garros final", false);
-    } finally {
-      setRefreshLoading(false);
+    }
+
+    // If there's nothing live, look up what's scheduled next.
+    if (!foundLive) {
+      await loadFixtures();
+    }
+
+    setRefreshLoading(false);
+  }
+
+  /* ===========================================================
+     STEP 5C — UPCOMING MATCHES (the fixtures endpoint)
+     ------------------------------------------------------------
+     When nothing is live, we check ATP fixtures for today, then
+     tomorrow, and list whatever we find. Same CORS caveat as the
+     live call: if the browser blocks it, we show a friendly note
+     about the next Grand Slam instead.
+     =========================================================== */
+  const FIXTURES_BASE =
+    "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/fixtures/";
+
+  const upcomingCard = document.getElementById("upcomingCard");
+  const upcomingLabel = document.getElementById("upcomingLabel");
+  const upcomingContent = document.getElementById("upcomingContent");
+
+  // Hide the fixtures card entirely (used when a live match is showing).
+  function hideUpcoming() {
+    upcomingCard.classList.add("hidden");
+    upcomingContent.innerHTML = "";
+  }
+
+  // Build a YYYY-MM-DD string for "today + offsetDays" in local time.
+  function dateString(offsetDays) {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return yyyy + "-" + mm + "-" + dd;
+  }
+
+  // Try to turn a fixture's "time" value (which could be many formats)
+  // into a clean, readable local time. Returns null if we can't.
+  function formatStartTime(raw) {
+    if (raw === undefined || raw === null || raw === "") return null;
+
+    // A plain "15:00" style string — just show it.
+    if (typeof raw === "string" && /^\d{1,2}:\d{2}$/.test(raw.trim())) {
+      return raw.trim();
+    }
+
+    // A number (or numeric string) is probably a unix timestamp.
+    let date = null;
+    const num = Number(raw);
+    if (!isNaN(num) && (typeof raw === "number" || /^\d+$/.test(String(raw).trim()))) {
+      // Seconds vs milliseconds: big numbers are already milliseconds.
+      date = new Date(num > 1e12 ? num : num * 1000);
+    } else if (typeof raw === "string") {
+      // Otherwise try to parse it as a date/time string (e.g. ISO format).
+      const parsed = new Date(raw);
+      if (!isNaN(parsed.getTime())) date = parsed;
+    }
+
+    if (date && !isNaN(date.getTime())) {
+      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    return null;
+  }
+
+  // Turn one fixture event into the small shape the list needs.
+  function mapFixture(ev) {
+    const homeTeam = firstOf(ev, ["homeTeam", "home", "player1", "firstPlayer", "team1", "p1"]);
+    const awayTeam = firstOf(ev, ["awayTeam", "away", "player2", "secondPlayer", "team2", "p2"]);
+
+    let n1 = readName(homeTeam);
+    let n2 = readName(awayTeam);
+    if ((!n1 || !n2) && Array.isArray(ev.teams) && ev.teams.length >= 2) {
+      n1 = n1 || readName(ev.teams[0]);
+      n2 = n2 || readName(ev.teams[1]);
+    }
+    n1 = n1 || (typeof ev.event_first_player === "string" ? ev.event_first_player : null);
+    n2 = n2 || (typeof ev.event_second_player === "string" ? ev.event_second_player : null);
+    if (!n1 || !n2) return null;
+
+    const rawTime = firstOf(ev, [
+      "startTime", "scheduled", "scheduledTime", "time", "matchTime",
+      "start", "startDate", "date", "timestamp", "event_time", "startTimestamp"
+    ]);
+
+    const tournament =
+      firstOf(ev, ["tournamentName"]) ||
+      readName(firstOf(ev, ["tournament", "league", "competition", "season"])) ||
+      "";
+    const round = firstOf(ev, ["round", "roundName", "tournament_round"]) || "";
+
+    // A short subtitle like "Wimbledon · Round 1" if we have those pieces.
+    let sub = "";
+    if (tournament && round) sub = tournament + " · " + round;
+    else if (tournament) sub = String(tournament);
+    else if (round) sub = String(round);
+
+    return {
+      players: n1 + " vs " + n2,
+      sub: sub,
+      time: formatStartTime(rawTime)
+    };
+  }
+
+  // Fetch fixtures for one date. Returns an array of mapped fixtures, or [].
+  async function tryFixtures(dateStr) {
+    try {
+      const res = await fetch(FIXTURES_BASE + dateStr, { headers: LIVE_API_HEADERS });
+      if (!res.ok) throw new Error("Fixtures status " + res.status);
+      const data = await res.json();
+      const events = findEventsArray(data);
+      const list = [];
+      for (let i = 0; i < events.length; i++) {
+        const f = mapFixture(events[i]);
+        if (f) list.push(f);
+      }
+      return list;
+    } catch (err) {
+      console.warn("Fixtures fetch failed for " + dateStr + ". Reason:", err.message);
+      return [];
+    }
+  }
+
+  // Draw the list of fixtures into the Upcoming Matches card.
+  function renderUpcoming(fixtures, whenLabel) {
+    upcomingLabel.textContent = "Upcoming Matches · " + whenLabel;
+
+    const MAX = 12; // keep the list tidy
+    const shown = fixtures.slice(0, MAX);
+
+    let html = shown.map(function (f) {
+      const timeHtml = f.time
+        ? '<div class="upcoming-time">' + f.time + '</div>'
+        : '<div class="upcoming-time"><span class="no-time">TBD</span></div>';
+      const subHtml = f.sub ? '<div class="upcoming-sub">' + f.sub + '</div>' : "";
+      return '' +
+        '<div class="upcoming-item">' +
+          '<div class="upcoming-match">' +
+            '<div class="upcoming-players">' + f.players + '</div>' +
+            subHtml +
+          '</div>' +
+          timeHtml +
+        '</div>';
+    }).join("");
+
+    if (fixtures.length > MAX) {
+      html += '<div class="upcoming-more">+ ' + (fixtures.length - MAX) + ' more scheduled</div>';
+    }
+
+    upcomingContent.innerHTML = html;
+    upcomingCard.classList.remove("hidden");
+  }
+
+  // Show the friendly "nothing scheduled" message in the card.
+  function showUpcomingMessage(message) {
+    upcomingLabel.textContent = "Upcoming Matches";
+    upcomingContent.innerHTML = '<div class="notice">' + message + '</div>';
+    upcomingCard.classList.remove("hidden");
+  }
+
+  // Check today first, then tomorrow, then fall back to the message.
+  async function loadFixtures() {
+    // Brief loading hint inside the card.
+    upcomingLabel.textContent = "Upcoming Matches";
+    upcomingContent.innerHTML =
+      '<div class="skeleton sk-line" style="width:60%;margin-top:8px;"></div>' +
+      '<div class="skeleton sk-line" style="width:45%;"></div>';
+    upcomingCard.classList.remove("hidden");
+
+    let fixtures = await tryFixtures(dateString(0));
+    let whenLabel = "Today";
+
+    if (!fixtures || fixtures.length === 0) {
+      fixtures = await tryFixtures(dateString(1));
+      whenLabel = "Tomorrow";
+    }
+
+    if (fixtures && fixtures.length > 0) {
+      renderUpcoming(fixtures, whenLabel);
+    } else {
+      showUpcomingMessage("No matches scheduled right now. Next Grand Slam: Wimbledon, June 29.");
     }
   }
 
