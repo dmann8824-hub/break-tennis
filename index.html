@@ -434,12 +434,14 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    /* Start time, muted and right-aligned (e.g. "Today, 8:30 AM"). */
     .upcoming-time {
       flex: none;
       font-size: 13px;
       font-weight: 600;
-      color: var(--accent);
+      color: var(--muted);
       text-align: right;
+      white-space: nowrap;
     }
     .upcoming-time .no-time { color: var(--muted); font-weight: 500; }
     .upcoming-more {
@@ -447,6 +449,53 @@
       color: var(--muted);
       text-align: center;
       padding-top: 12px;
+    }
+
+    /* Small fixed-green dot for matches starting within the next hour.
+       Green stays green on every surface so "starting soon" always reads. */
+    .soon-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #46b877;
+      box-shadow: 0 0 8px rgba(70, 184, 119, 0.85);
+      margin-right: 8px;
+      flex: none;
+      vertical-align: middle;
+    }
+
+    /* The live countdown pill above the list, tinted with the accent color. */
+    .countdown-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: rgba(var(--accent-rgb), 0.12);
+      border: 1px solid rgba(var(--accent-rgb), 0.35);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      margin: 16px 0 6px;
+    }
+    .countdown-badge .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.9);
+      flex: none;
+    }
+
+    /* "Last updated" note pinned to the bottom of the fixtures card. */
+    .upcoming-updated {
+      font-size: 11px;
+      color: var(--muted);
+      text-align: right;
+      margin-top: 16px;
+      letter-spacing: 0.3px;
     }
 
     /* =========================================================
@@ -1195,13 +1244,26 @@
   const upcomingLabel = document.getElementById("upcomingLabel");
   const upcomingContent = document.getElementById("upcomingContent");
 
+  // We keep one countdown timer running at a time. This holds its id so we
+  // can stop the old one before starting a new one (e.g. on each refresh).
+  let countdownTimer = null;
+
+  // Stop the live countdown if one is running.
+  function stopCountdown() {
+    if (countdownTimer !== null) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+  }
+
   // Hide the fixtures card entirely (used when a live match is showing).
   function hideUpcoming() {
+    stopCountdown();
     upcomingCard.classList.add("hidden");
     upcomingContent.innerHTML = "";
   }
 
-  // Build a YYYY-MM-DD string for "today + offsetDays" in local time.
+  // Build a YYYY-MM-DD string for "today + offsetDays" in the user's local time.
   function dateString(offsetDays) {
     const d = new Date();
     d.setDate(d.getDate() + offsetDays);
@@ -1211,36 +1273,75 @@
     return yyyy + "-" + mm + "-" + dd;
   }
 
-  // Try to turn a fixture's "time" value (which could be many formats)
-  // into a clean, readable local time. Returns null if we can't.
-  function formatStartTime(raw) {
+  /* ---- TIME CONVERSION (the important bit) -------------------
+     The fixtures API gives times as plain text like "14:30" in the
+     TOURNAMENT'S local time. During grass season the tour is mostly in
+     Europe (Stuttgart, 's-Hertogenbosch, etc.), so we assume those times
+     are Europe/Berlin = UTC+2 (CEST).
+
+     To convert correctly we glue the requested date + the time together
+     into an explicit "+02:00" timestamp, e.g. "2026-06-13T14:30:00+02:00".
+     Creating a Date from that gives JavaScript an exact moment in time.
+     Then toLocaleTimeString() with no locale argument renders it in the
+     viewer's OWN timezone automatically — so in Miami (EDT, UTC-4) that
+     14:30 Berlin start shows as 8:30 AM. No Miami offset is hardcoded;
+     it just uses whatever timezone the browser is set to.
+
+     We also handle two other shapes defensively: a full date/time string
+     (which already carries its own zone) and a unix timestamp (number).
+     Returns a real Date object, or null if we can't make sense of it.
+  ------------------------------------------------------------ */
+  function buildStartDate(raw, dateStr) {
     if (raw === undefined || raw === null || raw === "") return null;
 
-    // A plain "15:00" style string — just show it.
-    if (typeof raw === "string" && /^\d{1,2}:\d{2}$/.test(raw.trim())) {
-      return raw.trim();
+    if (typeof raw === "string") {
+      const t = raw.trim();
+
+      // Main case: a plain "H:MM" / "HH:MM" clock time from the API.
+      const hhmm = t.match(/^(\d{1,2}):(\d{2})$/);
+      if (hhmm) {
+        const hh = hhmm[1].padStart(2, "0");
+        // Assume the tournament clock is Europe/Berlin (UTC+2) this season.
+        const iso = dateStr + "T" + hh + ":" + hhmm[2] + ":00+02:00";
+        const d = new Date(iso);
+        return isNaN(d.getTime()) ? null : d;
+      }
+
+      // Otherwise it might be a full ISO/date string that has its own zone.
+      const parsed = new Date(t);
+      return isNaN(parsed.getTime()) ? null : parsed;
     }
 
-    // A number (or numeric string) is probably a unix timestamp.
-    let date = null;
+    // A number is probably a unix timestamp (seconds or milliseconds).
     const num = Number(raw);
-    if (!isNaN(num) && (typeof raw === "number" || /^\d+$/.test(String(raw).trim()))) {
-      // Seconds vs milliseconds: big numbers are already milliseconds.
-      date = new Date(num > 1e12 ? num : num * 1000);
-    } else if (typeof raw === "string") {
-      // Otherwise try to parse it as a date/time string (e.g. ISO format).
-      const parsed = new Date(raw);
-      if (!isNaN(parsed.getTime())) date = parsed;
-    }
-
-    if (date && !isNaN(date.getTime())) {
-      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (!isNaN(num)) {
+      const d = new Date(num > 1e12 ? num : num * 1000);
+      return isNaN(d.getTime()) ? null : d;
     }
     return null;
   }
 
+  // Decide whether a moment is Today / Tomorrow / a weekday, in local time.
+  function dayPrefix(date) {
+    const now = new Date();
+    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startTomorrow = new Date(startToday); startTomorrow.setDate(startToday.getDate() + 1);
+    const startDayAfter = new Date(startToday); startDayAfter.setDate(startToday.getDate() + 2);
+
+    if (date >= startToday && date < startTomorrow) return "Today";
+    if (date >= startTomorrow && date < startDayAfter) return "Tomorrow";
+    return date.toLocaleDateString([], { weekday: "short" }); // e.g. "Mon"
+  }
+
+  // Format just the clock part in the viewer's local timezone ("8:30 AM").
+  function localClock(date) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   // Turn one fixture event into the small shape the list needs.
-  function mapFixture(ev) {
+  // We pass in the date we requested (so the time can be combined with it)
+  // and a fallback day label for fixtures that have no time at all.
+  function mapFixture(ev, dateStr, fallbackDay) {
     const homeTeam = firstOf(ev, ["homeTeam", "home", "player1", "firstPlayer", "team1", "p1"]);
     const awayTeam = firstOf(ev, ["awayTeam", "away", "player2", "secondPlayer", "team2", "p2"]);
 
@@ -1265,7 +1366,7 @@
       "";
     const round = firstOf(ev, ["round", "roundName", "tournament_round"]) || "";
 
-    // A short subtitle like "Wimbledon · Round 1" if we have those pieces.
+    // A short subtitle like "Stuttgart · Round 1" if we have those pieces.
     let sub = "";
     if (tournament && round) sub = tournament + " · " + round;
     else if (tournament) sub = String(tournament);
@@ -1274,12 +1375,13 @@
     return {
       players: n1 + " vs " + n2,
       sub: sub,
-      time: formatStartTime(rawTime)
+      startDate: buildStartDate(rawTime, dateStr), // real moment in time, or null
+      fallbackDay: fallbackDay                     // used when there's no time
     };
   }
 
   // Fetch fixtures for one date. Returns an array of mapped fixtures, or [].
-  async function tryFixtures(dateStr) {
+  async function tryFixtures(dateStr, dayLabel) {
     try {
       const res = await fetch(FIXTURES_BASE + dateStr, { headers: LIVE_API_HEADERS });
       if (!res.ok) throw new Error("Fixtures status " + res.status);
@@ -1287,7 +1389,7 @@
       const events = findEventsArray(data);
       const list = [];
       for (let i = 0; i < events.length; i++) {
-        const f = mapFixture(events[i]);
+        const f = mapFixture(events[i], dateStr, dayLabel);
         if (f) list.push(f);
       }
       return list;
@@ -1297,38 +1399,115 @@
     }
   }
 
+  // Build the words for the countdown badge from a target start time.
+  function countdownText(target) {
+    const diffMs = target.getTime() - Date.now();
+    if (diffMs <= 0) return "Matches are underway";
+
+    const totalMin = Math.floor(diffMs / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h > 0 && m > 0) return "Next match in " + h + "h " + m + "m";
+    if (h > 0) return "Next match in " + h + "h";
+    return "Next match in " + m + "m";
+  }
+
+  // Start (or restart) the once-a-minute countdown ticking toward "target".
+  function startCountdown(target) {
+    stopCountdown(); // never stack two timers
+    const el = document.getElementById("countdownText");
+    if (!el) return;
+    el.textContent = countdownText(target);          // show immediately
+    countdownTimer = setInterval(function () {
+      const live = document.getElementById("countdownText");
+      if (!live) { stopCountdown(); return; }         // card got replaced
+      live.textContent = countdownText(target);
+    }, 60000);                                         // update every 60 seconds
+  }
+
   // Draw the list of fixtures into the Upcoming Matches card.
-  function renderUpcoming(fixtures, whenLabel) {
-    upcomingLabel.textContent = "Upcoming Matches · " + whenLabel;
+  // "fetchedAt" is the Date the fixtures came back, for the "Last updated" note.
+  function renderUpcoming(fixtures, fetchedAt) {
+    stopCountdown();
+    upcomingLabel.textContent = "Upcoming Matches";
+
+    const now = Date.now();
+    const HOUR = 60 * 60 * 1000;
+
+    // Find the soonest match that hasn't started yet — that's our countdown target.
+    let nextStart = null;
+    let anyKnownTime = false;
+    fixtures.forEach(function (f) {
+      if (f.startDate) {
+        anyKnownTime = true;
+        if (f.startDate.getTime() > now && (!nextStart || f.startDate < nextStart)) {
+          nextStart = f.startDate;
+        }
+      }
+    });
 
     const MAX = 12; // keep the list tidy
     const shown = fixtures.slice(0, MAX);
 
-    let html = shown.map(function (f) {
-      const timeHtml = f.time
-        ? '<div class="upcoming-time">' + f.time + '</div>'
-        : '<div class="upcoming-time"><span class="no-time">TBD</span></div>';
+    // The countdown badge (only if we actually know a time).
+    let badgeHtml = "";
+    if (nextStart) {
+      badgeHtml =
+        '<div class="countdown-badge"><span class="pulse-dot"></span>' +
+        '<span id="countdownText"></span></div>';
+    } else if (anyKnownTime) {
+      // We have times but they're all in the past → matches are underway.
+      badgeHtml =
+        '<div class="countdown-badge"><span class="pulse-dot"></span>' +
+        '<span id="countdownText">Matches are underway</span></div>';
+    }
+
+    // The match rows.
+    const rowsHtml = shown.map(function (f) {
+      // Time label: "Today, 8:30 AM" / "Tomorrow, 8:30 AM", or "TBD".
+      let timeLabel;
+      if (f.startDate) {
+        timeLabel = dayPrefix(f.startDate) + ", " + localClock(f.startDate);
+      } else {
+        timeLabel = '<span class="no-time">' + f.fallbackDay + ", TBD</span>";
+      }
+
+      // Green dot if this match starts within the next hour.
+      const soon = f.startDate &&
+        f.startDate.getTime() > now &&
+        (f.startDate.getTime() - now) <= HOUR;
+      const dotHtml = soon ? '<span class="soon-dot"></span>' : "";
+
       const subHtml = f.sub ? '<div class="upcoming-sub">' + f.sub + '</div>' : "";
+
       return '' +
         '<div class="upcoming-item">' +
           '<div class="upcoming-match">' +
-            '<div class="upcoming-players">' + f.players + '</div>' +
+            '<div class="upcoming-players">' + dotHtml + f.players + '</div>' +
             subHtml +
           '</div>' +
-          timeHtml +
+          '<div class="upcoming-time">' + timeLabel + '</div>' +
         '</div>';
     }).join("");
 
-    if (fixtures.length > MAX) {
-      html += '<div class="upcoming-more">+ ' + (fixtures.length - MAX) + ' more scheduled</div>';
-    }
+    const moreHtml = fixtures.length > MAX
+      ? '<div class="upcoming-more">+ ' + (fixtures.length - MAX) + ' more scheduled</div>'
+      : "";
 
-    upcomingContent.innerHTML = html;
+    // "Last updated" note showing when we fetched the fixtures.
+    const updatedHtml =
+      '<div class="upcoming-updated">Last updated: ' + localClock(fetchedAt) + '</div>';
+
+    upcomingContent.innerHTML = badgeHtml + rowsHtml + moreHtml + updatedHtml;
     upcomingCard.classList.remove("hidden");
+
+    // Now that the badge element exists in the page, start the live ticking.
+    if (nextStart) startCountdown(nextStart);
   }
 
   // Show the friendly "nothing scheduled" message in the card.
   function showUpcomingMessage(message) {
+    stopCountdown();
     upcomingLabel.textContent = "Upcoming Matches";
     upcomingContent.innerHTML = '<div class="notice">' + message + '</div>';
     upcomingCard.classList.remove("hidden");
@@ -1336,6 +1515,7 @@
 
   // Check today first, then tomorrow, then fall back to the message.
   async function loadFixtures() {
+    stopCountdown();
     // Brief loading hint inside the card.
     upcomingLabel.textContent = "Upcoming Matches";
     upcomingContent.innerHTML =
@@ -1343,18 +1523,17 @@
       '<div class="skeleton sk-line" style="width:45%;"></div>';
     upcomingCard.classList.remove("hidden");
 
-    let fixtures = await tryFixtures(dateString(0));
-    let whenLabel = "Today";
+    let fixtures = await tryFixtures(dateString(0), "Today");
 
     if (!fixtures || fixtures.length === 0) {
-      fixtures = await tryFixtures(dateString(1));
-      whenLabel = "Tomorrow";
+      fixtures = await tryFixtures(dateString(1), "Tomorrow");
     }
 
     if (fixtures && fixtures.length > 0) {
-      renderUpcoming(fixtures, whenLabel);
+      // The moment we consider the data "fetched", for the Last updated note.
+      renderUpcoming(fixtures, new Date());
     } else {
-      showUpcomingMessage("No matches scheduled right now. Next Grand Slam: Wimbledon, June 29.");
+      showUpcomingMessage("No matches scheduled right now. Next major event: Wimbledon, June 29.");
     }
   }
 
