@@ -243,7 +243,7 @@
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 18px;
-      padding: 22px;
+      padding: 26px;
       box-shadow: var(--card-shadow);
     }
     .label {
@@ -257,7 +257,7 @@
       display: flex;
       align-items: baseline;
       gap: 8px;
-      font-size: 16px;
+      font-size: 17px;
       font-weight: 700;
       margin-bottom: 12px;
     }
@@ -320,6 +320,11 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      animation: hero-fadein 0.6s ease;
+    }
+    @keyframes hero-fadein {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     .hero::before {
       content: "";
@@ -342,10 +347,25 @@
     .hero-brand .brand-dot { width: 12px; height: 12px; }
     .hero-tagline {
       position: relative;
-      color: var(--muted);
-      font-size: 14px;
-      font-weight: 400;
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 700;
       margin-top: 8px;
+    }
+    .hero-subdesc {
+      position: relative;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 400;
+      margin-top: 6px;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+    .hero-cta {
+      position: relative;
+      margin-top: 14px;
+      max-width: 220px;
+      width: 100%;
     }
     .hero-live {
       position: relative;
@@ -531,6 +551,46 @@
     .how-emoji { font-size: 22px; }
     .how-title { font-size: 14px; font-weight: 700; margin-top: 8px; }
     .how-desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* =========================================================
+       HOME — EXAMPLE MATCH BREAKDOWN
+       ========================================================= */
+    .example-card { display: flex; flex-direction: column; gap: 14px; }
+    .example-top { display: flex; flex-direction: column; gap: 4px; }
+    .example-tournament {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+    }
+    .example-match { font-size: 17px; font-weight: 700; }
+    .example-scoreline { font-size: 13px; color: var(--muted); }
+    .example-wp { display: flex; flex-direction: column; gap: 8px; }
+    .example-wp-row { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; }
+    .example-wp-row .lead { color: var(--accent); }
+    .example-wp-row .dim { color: var(--muted); }
+    .example-momentum {
+      position: relative; height: 14px; border-radius: 999px;
+      background: var(--track); overflow: hidden;
+    }
+    .example-momentum-fill {
+      position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.55), var(--accent));
+      box-shadow: 0 0 18px rgba(var(--accent-rgb),0.35);
+    }
+    .example-momentum-center {
+      position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
+      transform: translateX(-1px); background: rgba(255,255,255,0.35);
+    }
+    html[data-theme="light"] .example-momentum-center { background: rgba(0,0,0,0.30); }
+    .example-caption { font-size: 13px; color: var(--muted); }
+    .example-foot {
+      display: flex;
+      justify-content: flex-end;
+      padding-top: 12px;
+      border-top: 1px solid var(--card-border);
+    }
 
     /* =========================================================
        MATCHES TAB — sub-tabs + vertical list
@@ -934,6 +994,10 @@
             <span>Break</span>
           </div>
           <div class="hero-tagline">Tennis momentum, decoded.</div>
+          <div class="hero-subdesc">Real-time win probability, pressure moments, and serve trends for every match.</div>
+          <div class="hero-cta">
+            <button class="btn btn-primary" id="heroBrowseBtn">Browse matches →</button>
+          </div>
           <div class="hero-live hidden" id="heroLive">
             <span class="live-dot" aria-hidden="true"></span>
             <span id="heroLiveText"></span>
@@ -997,6 +1061,32 @@
               <div class="how-emoji" aria-hidden="true">③</div>
               <div class="how-title">Share the insight</div>
               <div class="how-desc">Download a premium share card.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Example Match Breakdown -->
+        <div>
+          <div class="section-title">Example match breakdown</div>
+          <div class="card example-card">
+            <div class="example-top">
+              <div class="example-tournament">Roland-Garros · Final</div>
+              <div class="example-match">Jannik Sinner vs Carlos Alcaraz</div>
+              <div class="example-scoreline">6-3&nbsp;&nbsp;3-6&nbsp;&nbsp;6-7&nbsp;&nbsp;6-4&nbsp;&nbsp;6-4</div>
+            </div>
+            <div class="example-wp">
+              <div class="example-wp-row">
+                <span class="lead">Jannik Sinner</span>
+                <span class="dim">Carlos Alcaraz</span>
+              </div>
+              <div class="example-momentum">
+                <div class="example-momentum-fill" style="width: 63%;"></div>
+                <div class="example-momentum-center"></div>
+              </div>
+            </div>
+            <div class="example-caption">See how momentum shifted during the Roland-Garros final</div>
+            <div class="example-foot">
+              <button class="link-btn" id="exampleViewBtn">View full analysis →</button>
             </div>
           </div>
         </div>
@@ -1927,6 +2017,15 @@ function stopHomeCountdown() { if (homeCountdownTimer) { clearInterval(homeCount
   $("featuredCard").addEventListener("click", function () { loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); });
   $("featuredCard").addEventListener("keydown", function (e) {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); }
+  });
+
+  // Hero "Browse matches →" button.
+  $("heroBrowseBtn").addEventListener("click", function () { showTab("matches"); });
+
+  // Example match breakdown — "View full analysis →" link.
+  $("exampleViewBtn").addEventListener("click", function () {
+    loadMatch(FALLBACK_DATA.matches[0]);
+    showTab("analysis");
   });
 
   /* ===========================================================
