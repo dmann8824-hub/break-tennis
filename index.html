@@ -1473,8 +1473,20 @@
     const tournament = readTournament(ev);
     const round = firstOf(ev, ["round", "roundName", "tournament_round"]) || "";
     const cls = classifyTournament(tournament);
-    const rawTime = firstOf(ev, ["startTime", "scheduled", "scheduledTime", "time", "matchTime", "start", "event_time"]);
-    const clockStr = (typeof rawTime === "string" && /^\d{1,2}:\d{2}$/.test(rawTime.trim())) ? rawTime.trim() : null;
+      // The API returns a UTC ISO timestamp in the "date" field, e.g. "2026-06-13T21:00:00.000Z"
+    const utcTime = firstOf(ev, ["date", "startTime", "scheduled", "scheduledTime", "time", "matchTime", "start", "event_time"]);
+    let clockStr = null;
+    let startLocal = null;
+    if (typeof utcTime === "string") {
+      const d = new Date(utcTime);
+      if (!isNaN(d.getTime())) {
+        startLocal = d;
+        clockStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      } else {
+        const m = utcTime.trim().match(/^(\d{1,2}):(\d{2})$/);
+        if (m) clockStr = prettyClock(utcTime);
+      }
+    }
 
     let sub = "";
     if (tournament && round) sub = tournament + " · " + round;
@@ -1491,8 +1503,8 @@
       badge: cls.badge,
       roundRank: roundRank(round),
       surfaceEmoji: surfaceEmoji(tournament),
-      clockLabel: prettyClock(clockStr),
-      startLocal: clockToLocalDate(clockStr, dayOffset),
+       clockLabel: clockStr,
+      startLocal: startLocal || clockToLocalDate(clockStr, dayOffset),
       completed: !!completed,
       // The match object used if the user taps to analyse this fixture.
       match: {
