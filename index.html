@@ -1,23 +1,25 @@
 <!DOCTYPE html>
 <!--
-  BREAK — tennis momentum tracker
-  ================================
-  This is the WHOLE website in one file. There are three big parts:
-    1) <style>  — all the looks (colors, layout, the momentum bar, charts)
-    2) <body>   — the visible boxes ("cards") that hold the content
-    3) <script> — all the brains (loading data, the math, drawing the share card)
-  Everything is vanilla HTML/CSS/JS. No frameworks, no libraries, no backend.
-  Read the comments — they explain each part in plain English.
+  BREAK — tennis momentum tracker (native-app rebuild)
+  =====================================================
+  One file. Four tabs (Home / Matches / Analysis / Share) shown and hidden with
+  JavaScript — no router, no reloads. Vanilla HTML/CSS/JS, no libraries.
+
+  Preserved from the previous version (re-skinned, logic intact):
+    • Math: strengthScore, winProbabilities, pressureScore, serveDirection, buildServeChart
+    • FALLBACK_DATA (the hardcoded Roland-Garros final)
+    • RapidAPI live + fixtures fetches (same endpoint, headers, key)
+    • The 1080x1350 premium share-card canvas drawing
+    • Surface theming via data-surface + localStorage "break_surface"
+    • Venue-local time labels with the flashscore.com disclaimer
+    • Skeleton screens and the fetch fallback chain
 -->
-<html lang="en" data-surface="clay">
+<html lang="en" data-surface="clay" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
-  <!-- This line makes the site size itself correctly on phones (mobile-first). -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Break · Tennis Momentum Tracker</title>
 
-  <!-- Google Font: Space Grotesk. If the phone is offline, the CSS falls back
-       to the system font automatically (see the font-family rule below). -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -25,153 +27,169 @@
   <style>
     /* =========================================================
        COLOR SYSTEM
-       These "--variables" are reusable color names. Changing the
-       surface (clay/grass/hard) just swaps the --accent variables,
-       and everything that uses them updates at once.
+       Base colors are theme-dependent (dark/light). The accent is
+       surface-dependent (clay/grass/hard). Everything reads these vars.
        ========================================================= */
     :root {
-      --bg:      #0b0d0f;   /* deep near-black page background */
-      --card:    #14181c;   /* dark charcoal card background  */
-      --text:    #f4f6f7;   /* off-white main text            */
-      --muted:   #8a929b;   /* muted gray secondary text      */
-      --border:  rgba(255, 255, 255, 0.07); /* faint card edge */
-      --track:   rgba(255, 255, 255, 0.06); /* empty bar color  */
+      --bg:          #090b0d;
+      --card-bg:     #11161a;
+      --card-bg-alt: #151a1f;
+      --card-border: rgba(255, 255, 255, 0.06);
+      --text:        #edeff1;
+      --muted:       #7d8690;
+      --track:       rgba(255, 255, 255, 0.05);
+      --nav-bg:      #0d1115;
+      --card-shadow: 0 4px 24px rgba(0, 0, 0, 0.40);
+      --glow-alpha:  0.08;
+      --red:         #c97d7d;  /* muted warm red for "dipping" / errors */
+      --gold:        #f0c040;  /* grand-slam badge dot */
 
-      /* The accent is set per-surface just below. Defaults to clay. */
-      --accent:     #e0723e;
-      --accent-rgb: 224, 114, 62;
+      --accent:      #e07b3e;
+      --accent-rgb:  224, 123, 62;
     }
 
-    /* Each surface only changes the accent color + its RGB version.
-       --accent-rgb lets us build see-through glows like rgba(var(--accent-rgb), .3) */
-    html[data-surface="clay"]  { --accent: #e0723e; --accent-rgb: 224, 114, 62; }
-    html[data-surface="grass"] { --accent: #46b877; --accent-rgb: 70, 184, 119; }
-    html[data-surface="hard"]  { --accent: #5b9bd5; --accent-rgb: 91, 155, 213; }
+    /* Light mode: swap base colors, keep accents. */
+    html[data-theme="light"] {
+      --bg:          #f5f6f8;
+      --card-bg:     #ffffff;
+      --card-bg-alt: #f0f2f5;
+      --card-border: rgba(0, 0, 0, 0.08);
+      --text:        #1a1d21;
+      --muted:       #5d6570;
+      --track:       rgba(0, 0, 0, 0.06);
+      --nav-bg:      #ffffff;
+      --card-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+      --glow-alpha:  0.05;
+    }
+
+    /* Surface accent swaps. */
+    html[data-surface="clay"]  { --accent: #e07b3e; --accent-rgb: 224, 123, 62; }
+    html[data-surface="grass"] { --accent: #3ea86a; --accent-rgb: 62, 168, 106; }
+    html[data-surface="hard"]  { --accent: #4a90d9; --accent-rgb: 74, 144, 217; }
 
     /* =========================================================
-       GLOBAL RESETS + SMOOTH SURFACE TRANSITIONS
-       The transition line is what makes the color scheme glide
-       (~0.35s) instead of snapping when you switch surfaces.
+       RESETS + GLOBAL TRANSITIONS (the surface/theme glide)
        ========================================================= */
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
       transition:
-        background-color 0.35s ease,
-        border-color 0.35s ease,
-        color 0.35s ease,
-        fill 0.35s ease,
-        stroke 0.35s ease,
-        box-shadow 0.35s ease;
+        background-color 0.4s ease,
+        border-color 0.4s ease,
+        color 0.4s ease,
+        fill 0.4s ease,
+        stroke 0.4s ease,
+        box-shadow 0.4s ease;
     }
 
-    /* Tabular-nums makes all digits the same width so numbers line up. */
+    html, body { height: 100%; }
+
     body {
       font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont,
-                   "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                   "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
       line-height: 1.4;
       font-feature-settings: "tnum" 1;
       -webkit-font-smoothing: antialiased;
       min-height: 100vh;
-      /* A soft accent glow bleeding in from the top so the page feels alive. */
+      /* Surface glow bleeding from the top-right corner. */
       background-image: radial-gradient(
-        circle at 85% -5%,
-        rgba(var(--accent-rgb), 0.16),
-        transparent 45%
+        circle at 92% -2%,
+        rgba(var(--accent-rgb), var(--glow-alpha)),
+        transparent 55%
       );
       background-attachment: fixed;
     }
 
-    /* The whole app lives inside this centered column. Max 720px on desktop. */
-    .wrap {
-      width: 100%;
-      max-width: 720px;
-      margin: 0 auto;
-      padding: 20px 16px 48px;
-    }
-
-    /* Sections stack vertically with 16px gaps between them. */
-    .stack { display: flex; flex-direction: column; gap: 16px; }
-
     /* =========================================================
-       SHARED PIECES: cards, labels, big numbers
-       ========================================================= */
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      padding: 24px;
-      /* Premium depth: a soft drop shadow plus a 1px accent highlight along
-         the very top edge (the inset shadow), at ~15% opacity. */
-      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30),
-                  inset 0 1px 0 rgba(var(--accent-rgb), 0.15);
-    }
-
-    /* Small uppercase label used above sections (e.g. "WIN PROBABILITY"). */
-    .label {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 2px;
-      color: var(--muted);
-    }
-
-    /* =========================================================
-       HEADER: the BREAK wordmark + surface dropdown
+       STICKY TOP BAR (48px) — wordmark + surface + theme toggle
        ========================================================= */
     .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      height: 48px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 4px;
+      padding: 0 16px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--card-border);
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 9px;
-      font-size: 20px;
+      gap: 8px;
+      font-size: 18px;
       font-weight: 700;
-      letter-spacing: -0.5px;
+      letter-spacing: -0.4px;
     }
-    /* The little colored dot next to the word BREAK. */
     .brand-dot {
-      width: 11px;
-      height: 11px;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
       background: var(--accent);
-      box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.9);
+      box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.9);
+      flex: none;
     }
+    /* The pulsing green dot that appears when a Grand Slam is live. */
+    .brand-live {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3ea86a;
+      box-shadow: 0 0 8px rgba(62, 168, 106, 0.9);
+      flex: none;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .icon-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 9px;
+      color: var(--text);
+      width: 34px;
+      height: 34px;
+      font-size: 15px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s ease, border-color 0.4s ease, background-color 0.4s ease;
+    }
+    .icon-btn:hover { border-color: var(--accent); transform: scale(1.05); }
+    .icon-btn:active { transform: scale(0.95); }
+    .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    /* The surface chooser. Styled to match the dark theme. */
-    .surface-pick {
-      position: relative;
-    }
+    .surface-pick { position: relative; }
     select {
       appearance: none;
       -webkit-appearance: none;
-      background: var(--card);
+      background: var(--card-bg);
       color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 9px 34px 9px 14px;
+      border: 1px solid var(--card-border);
+      border-radius: 9px;
+      padding: 8px 30px 8px 12px;
       font-family: inherit;
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
       outline: none;
     }
-    select:focus-visible { border-color: var(--accent); }
-    /* The little down-arrow drawn with CSS on the right of the dropdown. */
+    select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .surface-pick::after {
       content: "";
       position: absolute;
-      right: 14px;
+      right: 12px;
       top: 50%;
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       border-right: 2px solid var(--muted);
       border-bottom: 2px solid var(--muted);
       transform: translateY(-65%) rotate(45deg);
@@ -179,613 +197,925 @@
     }
 
     /* =========================================================
-       MATCH HEADER (tournament + match status)
+       PERSISTENT "NOW" BAR (36px, home + matches only)
        ========================================================= */
-    .match-head { text-align: center; }
-    .match-head .tournament {
-      color: var(--accent);
-      font-weight: 600;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
+    .nowbar {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--card-border);
       font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
     }
-    .match-head .matchname {
-      font-size: 22px;
+    .nowbar::-webkit-scrollbar { display: none; }
+    .nowbar .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #3ea86a; box-shadow: 0 0 7px rgba(62,168,106,0.9);
+      flex: none; animation: pulse 1.5s ease-in-out infinite;
+    }
+    .nowbar.hidden { display: none; }
+
+    /* =========================================================
+       LAYOUT: content column + bottom-nav clearance
+       ========================================================= */
+    .content {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 18px 16px calc(96px + env(safe-area-inset-bottom));
+    }
+    .tab { display: none; animation: fadein 0.2s ease; }
+    .tab.active { display: block; }
+    @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+    .stack { display: flex; flex-direction: column; gap: 16px; }
+
+    /* =========================================================
+       SHARED PIECES
+       ========================================================= */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: var(--card-shadow);
+    }
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2.5px;
+      color: var(--muted);
+    }
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 16px;
       font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .section-title .count { font-size: 13px; font-weight: 500; color: var(--muted); }
+
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0;
+    }
+    .link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* Primary + outlined buttons */
+    .btn {
+      width: 100%;
+      padding: 15px;
+      border-radius: 13px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+      transition: transform 0.15s ease, filter 0.2s ease,
+                  border-color 0.4s ease, box-shadow 0.4s ease, background-color 0.4s ease;
+    }
+    .btn:hover { transform: scale(1.02); }
+    .btn:active { transform: scale(0.98); }
+    .btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+    .btn-primary {
+      border: none;
+      color: #0b0d0f;
+      background: var(--accent);
+      background-image: linear-gradient(135deg,
+                        color-mix(in srgb, var(--accent), #ffffff 22%), var(--accent));
+      box-shadow: 0 8px 30px rgba(var(--accent-rgb), 0.35);
+    }
+    html[data-theme="light"] .btn-primary { color: #ffffff; }
+    .btn-primary:hover { filter: brightness(1.06); }
+    .btn-outline {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+    }
+    .btn-outline:hover { border-color: var(--accent); }
+
+    /* =========================================================
+       HOME — HERO
+       ========================================================= */
+    .hero {
+      position: relative;
+      text-align: center;
+      padding: 22px 10px 18px;
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 300px; height: 300px;
+      transform: translate(-50%, -55%);
+      background: radial-gradient(circle, rgba(var(--accent-rgb), 0.10), transparent 70%);
+      pointer-events: none;
+    }
+    .hero-brand {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -1px;
+    }
+    .hero-brand .brand-dot { width: 12px; height: 12px; }
+    .hero-tagline {
+      position: relative;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 400;
       margin-top: 8px;
     }
-    /* The status is now a rounded pill instead of plain text. */
-    .match-head .status {
+    .hero-live {
+      position: relative;
+      margin-top: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-      margin-top: 10px;
-      padding: 5px 13px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border);
     }
-    /* Gently pulsing green dot shown only when a match is actually live. */
-    .live-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #46b877;
-      box-shadow: 0 0 8px rgba(70, 184, 119, 0.9);
-      flex: none;
-      animation: livepulse 1.6s ease-in-out infinite;
-    }
-    @keyframes livepulse {
-      0%, 100% { opacity: 1;    transform: scale(1); }
-      50%      { opacity: 0.4;  transform: scale(0.78); }
+    .hero-live .live-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb),0.9);
+      animation: pulse 1.5s ease-in-out infinite;
     }
 
     /* =========================================================
-       WIN PROBABILITY (the centerpiece)
+       HOME — FEATURED MATCH CARD (clickable)
        ========================================================= */
-    .wp-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
-      gap: 12px;
+    .featured {
+      cursor: pointer;
+      border-top: 1px solid rgba(var(--accent-rgb), 0.20);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.40);
+      transition: transform 0.2s ease, box-shadow 0.2s ease,
+                  background-color 0.4s ease, border-color 0.4s ease;
     }
-    .wp-side { flex: 1; min-width: 0; }
-    .wp-side.right { text-align: right; }
-    .wp-name {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    /* The giant percentage numbers. */
-    .wp-pct {
-      font-size: 62px;
-      font-weight: 700;
-      letter-spacing: -2px;
-      line-height: 1;
-      margin-top: 6px;
-    }
-    /* The leader's number gets a subtle gradient fill + glow. */
-    .wp-pct.lead {
-      color: var(--accent); /* fallback if background-clip text is unsupported */
-      background: linear-gradient(135deg,
-                  color-mix(in srgb, var(--accent), #ffffff 30%),
-                  var(--accent));
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      text-shadow: 0 0 28px rgba(var(--accent-rgb), 0.40);
-    }
-    /* A subtle divider between the win-prob numbers and the momentum bar. */
-    .wp-divider {
-      height: 1px;
-      background: var(--border);
-      margin-top: 18px;
-      border: none;
-    }
-
-    /* THE SIGNATURE ELEMENT — the momentum bar. */
-    .momentum {
-      position: relative;
-      height: 18px;
-      border-radius: 999px;
-      background: var(--track);
-      margin-top: 18px;
-      overflow: hidden;
-    }
-    .momentum-fill {
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      border-radius: 999px;
-      /* Gradient fill from a deeper accent into the bright accent. */
-      background: linear-gradient(
-        90deg,
-        rgba(var(--accent-rgb), 0.55),
-        var(--accent)
-      );
-      box-shadow: 0 0 24px rgba(var(--accent-rgb), 0.35);
-      /* Width is set by JS. This makes the fill slide when surfaces change. */
-      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-                  background-color 0.35s ease, box-shadow 0.35s ease;
-    }
-    /* The faint white "net" line marking the exact 50/50 middle. */
-    .momentum-center {
-      position: absolute;
-      left: 50%;
-      top: 0;
-      bottom: 0;
-      width: 2px;
-      transform: translateX(-1px);
-      background: rgba(255, 255, 255, 0.35);
-    }
-    .wp-foot {
-      display: flex;
-      justify-content: space-between;
-      margin-top: 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    /* =========================================================
-       PRESSURE METER
-       ========================================================= */
-    .pressure-item { margin-top: 18px; }
-    .pressure-item:first-of-type { margin-top: 16px; }
-    .pressure-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 8px;
-    }
-    .pressure-name { font-size: 15px; font-weight: 600; }
-    .pressure-status { font-size: 13px; color: var(--muted); }
-    .pressure-status b { color: var(--text); font-weight: 600; }
-    .pbar {
-      height: 12px;
-      border-radius: 999px;
-      background: var(--track);
-      overflow: hidden;
-    }
-    .pbar-fill {
-      height: 100%;
-      border-radius: 999px;
-      background: linear-gradient(
-        90deg,
-        rgba(var(--accent-rgb), 0.55),
-        var(--accent)
-      );
-      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-                  background-color 0.35s ease;
-    }
-
-    /* =========================================================
-       SERVE QUALITY TREND
-       ========================================================= */
-    .serve-item { margin-top: 20px; }
-    .serve-item:first-of-type { margin-top: 16px; }
-    .serve-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 6px;
-    }
-    .serve-name { font-size: 15px; font-weight: 600; }
-    .serve-dir {
-      font-size: 12px;
-      font-weight: 600;
+    html[data-theme="light"] .featured { box-shadow: var(--card-shadow); }
+    .featured:hover { transform: translateY(-2px); box-shadow: 0 10px 34px rgba(0,0,0,0.5); }
+    html[data-theme="light"] .featured:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
+    .featured:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .feat-tournament {
       color: var(--accent);
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-    /* Direction arrows: green up, red down, muted sideways. */
-    .serve-arrow { font-weight: 700; }
-    .serve-arrow.up     { color: #46b877; }
-    .serve-arrow.down   { color: #e0573e; }
-    .serve-arrow.steady { color: var(--muted); }
-    .serve-chart { width: 100%; height: auto; display: block; }
-    /* The chart line + dots use the accent color and transition smoothly. */
-    .serve-line { fill: none; stroke: var(--accent); stroke-width: 2.5;
-                  stroke-linecap: round; stroke-linejoin: round; }
-    .serve-dot  { fill: var(--accent); }
-    .serve-area { fill: rgba(var(--accent-rgb), 0.16); stroke: none; }
-
-    /* =========================================================
-       DOWNLOAD BUTTON
-       ========================================================= */
-    .download-btn {
-      width: 100%;
-      padding: 16px;
-      border: none;
-      border-radius: 14px;
-      background: var(--accent); /* fallback */
-      /* Gradient from a lighter accent into the accent color. */
-      background-image: linear-gradient(135deg,
-                        color-mix(in srgb, var(--accent), #ffffff 22%),
-                        var(--accent));
-      color: #0b0d0f;
-      font-family: inherit;
-      font-size: 15px;
+      font-size: 11px;
       font-weight: 700;
-      letter-spacing: 0.3px;
-      cursor: pointer;
-      box-shadow: 0 8px 30px rgba(var(--accent-rgb), 0.35);
-      transition: transform 0.15s ease, filter 0.2s ease,
-                  box-shadow 0.35s ease, background-color 0.35s ease;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
     }
-    .download-btn:hover { filter: brightness(1.06); transform: scale(1.02); }
-    .download-btn:active { transform: scale(0.98); }
-    .download-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-    .download-btn:disabled { opacity: 0.5; cursor: default; }
-
-    /* =========================================================
-       REFRESH LIVE DATA BUTTON (top of page)
-       A quieter, outlined button so it doesn't fight the bright
-       accent-colored Download button at the bottom.
-       ========================================================= */
-    .refresh-btn {
-      width: 100%;
+    .feat-row {
       display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 9px;
-      padding: 14px;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--card);
-      color: var(--text);
-      font-family: inherit;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      cursor: pointer;
-      transition: transform 0.15s ease, border-color 0.35s ease,
-                  background-color 0.35s ease, box-shadow 0.35s ease;
-    }
-    .refresh-btn:hover { border-color: var(--accent); transform: scale(1.02); }
-    .refresh-btn:active { transform: scale(0.98); }
-    .refresh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .refresh-btn:disabled { opacity: 0.6; cursor: default; }
-
-    /* The little spinning ring. It's hidden until a fetch is running. */
-    .spinner {
-      width: 15px;
-      height: 15px;
-      border: 2px solid rgba(var(--accent-rgb), 0.3);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      display: none; /* shown via JS while loading */
-    }
-    .refresh-btn.loading .spinner { display: inline-block; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Small message under the button, e.g. the "no live matches" note. */
-    .refresh-status {
-      text-align: center;
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 8px;
-      min-height: 16px; /* reserve space so layout doesn't jump */
-    }
-    .refresh-status.live { color: var(--accent); }
-
-    /* =========================================================
-       UPCOMING MATCHES (fixtures list)
-       Each row: matchup on the left, start time on the right,
-       with a thin divider between rows. Matches the dark theme.
-       ========================================================= */
-    /* Wrapper so striping only counts match rows, not the badge/notes. */
-    .upcoming-list { display: flex; flex-direction: column; }
-    .upcoming-item {
-      display: flex;
-      align-items: center;
       justify-content: space-between;
+      align-items: center;
+      margin-top: 14px;
       gap: 12px;
-      padding: 14px 12px;
-      border-top: 1px solid var(--border);
-      border-radius: 10px;
     }
-    .upcoming-item:first-child { border-top: none; }
-    /* Every other row gets a slightly lighter background. */
-    .upcoming-list .upcoming-item:nth-child(even) {
-      background: rgba(255, 255, 255, 0.025);
-    }
-    .upcoming-match { min-width: 0; }
-    .upcoming-players {
-      font-size: 15px;
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    /* The little dot the accent color, sitting before "vs" feel. */
-    .upcoming-sub {
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 3px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    /* Start time, muted and right-aligned (e.g. "Today, 8:30 AM"). */
-    .upcoming-time {
-      flex: none;
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--muted);
-      text-align: right;
-      white-space: nowrap;
-    }
-    .upcoming-time .no-time { color: var(--muted); font-weight: 500; }
-    .upcoming-more {
-      font-size: 12px;
-      color: var(--muted);
-      text-align: center;
-      padding-top: 12px;
+    .feat-name { font-size: 20px; font-weight: 700; }
+    .feat-name.dim { color: var(--muted); }
+    .feat-scores { display: flex; gap: 10px; font-size: 16px; font-weight: 600; }
+    .feat-scores span { min-width: 16px; text-align: center; }
+    .feat-foot {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--card-border);
     }
 
-    /* Small fixed-green dot for matches starting within the next hour.
-       Green stays green on every surface so "starting soon" always reads. */
-    .soon-dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #46b877;
-      box-shadow: 0 0 8px rgba(70, 184, 119, 0.85);
-      margin-right: 8px;
-      flex: none;
-      vertical-align: middle;
+    /* =========================================================
+       HOME — GRAND SLAM COUNTDOWN CARD
+       ========================================================= */
+    .gs-card { display: flex; flex-direction: column; gap: 12px; }
+    .gs-top { display: flex; align-items: center; gap: 12px; }
+    .gs-emoji { font-size: 26px; flex: none; }
+    .gs-info { flex: 1; min-width: 0; }
+    .gs-name { font-size: 15px; font-weight: 700; }
+    .gs-date { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .gs-count { font-size: 16px; font-weight: 700; text-align: right; }
+    .gs-count.live { color: var(--accent); text-shadow: 0 0 16px rgba(var(--accent-rgb),0.5); }
+    .gs-progress { height: 4px; border-radius: 999px; background: var(--track); overflow: hidden; }
+    .gs-progress-fill {
+      height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.5), var(--accent));
+      transition: width 0.6s ease;
     }
 
-    /* The live countdown pill above the list, tinted with the accent color. */
-    /* The live countdown pill above the list, tinted with the accent color.
-       Centered and a touch larger via the .countdown-wrap container. */
-    .countdown-wrap { text-align: center; margin: 18px 0 4px; }
+    /* =========================================================
+       FILTER PILLS (home + matches)
+       ========================================================= */
+    .pills {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scrollbar-width: none;
+    }
+    .pills::-webkit-scrollbar { display: none; }
+    .pill {
+      flex: none;
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: transform 0.15s ease, background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+    }
+    .pill:hover { transform: scale(1.04); }
+    .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .pill.active {
+      background: var(--accent);
+      color: #0b0d0f;
+      border-color: var(--accent);
+    }
+    html[data-theme="light"] .pill.active { color: #ffffff; }
+
+    /* =========================================================
+       HOME — TODAY'S MATCHES (horizontal scroll cards)
+       ========================================================= */
     .countdown-badge {
       display: inline-flex;
       align-items: center;
-      gap: 9px;
-      padding: 10px 20px;
+      gap: 8px;
+      padding: 7px 14px;
       border-radius: 999px;
       background: rgba(var(--accent-rgb), 0.12);
       border: 1px solid rgba(var(--accent-rgb), 0.35);
       color: var(--accent);
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
-      letter-spacing: 0.2px;
+      margin: 12px 0;
     }
     .countdown-badge .pulse-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.9);
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb),0.9);
+      flex: none; animation: pulse 1.5s ease-in-out infinite;
+    }
+    .hscroll {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding: 4px 2px 10px;
+      scroll-behavior: smooth;
+      scrollbar-width: thin;
+    }
+    .hscroll::-webkit-scrollbar { height: 6px; }
+    .hscroll::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 999px; }
+    .hcard {
       flex: none;
-      animation: livepulse 1.6s ease-in-out infinite;
+      width: 160px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 14px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      box-shadow: var(--card-shadow);
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.4s ease, background-color 0.4s ease;
     }
-    /* Thin bar under the badge showing how close the next match is. */
-    .countdown-progress {
-      height: 5px;
-      max-width: 320px;
-      border-radius: 999px;
-      background: var(--track);
-      overflow: hidden;
-      margin: 8px auto 4px;
-    }
-    .countdown-progress-fill {
-      height: 100%;
-      width: 0%;
-      border-radius: 999px;
-      background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.5), var(--accent));
-      transition: width 0.6s ease;
-    }
-    /* Small timezone label next to a time, and the venue-local tag/note. */
-    .tz-abbr { color: var(--muted); font-weight: 500; font-size: 11px; margin-left: 4px; }
-    .venue-tag { color: var(--muted); font-weight: 500; font-size: 11px; }
-    .upcoming-note {
-      font-size: 11px;
-      color: var(--muted);
-      text-align: center;
-      margin-top: 12px;
-      font-style: italic;
-    }
+    .hcard:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb),0.4); }
+    .hcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .hcard-top { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700;
+                 text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
+    .hcard-tour { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hcard-players { font-size: 14px; font-weight: 700; line-height: 1.3; min-height: 36px; }
+    .hcard-time { font-size: 12px; color: var(--accent); font-weight: 600; margin-top: auto; }
 
-    /* Beautiful empty state: floating tennis ball with an accent glow. */
-    .empty-state { text-align: center; padding: 28px 10px 16px; }
-    .empty-ball {
-      font-size: 56px;
-      line-height: 1;
-      display: inline-block;
-      filter: drop-shadow(0 0 26px rgba(var(--accent-rgb), 0.55));
-      animation: floaty 3s ease-in-out infinite;
-    }
-    @keyframes floaty {
-      0%, 100% { transform: translateY(0); }
-      50%      { transform: translateY(-6px); }
-    }
-    .empty-title { font-size: 20px; font-weight: 700; margin-top: 16px; }
-    .empty-sub { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    /* importance dots */
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+    .dot-slam   { background: var(--gold); box-shadow: 0 0 7px rgba(240,192,64,0.7); }
+    .dot-masters{ background: var(--accent); }
+    .dot-500    { background: rgba(var(--accent-rgb), 0.6); }
+    .dot-soon   { background: #3ea86a; box-shadow: 0 0 7px rgba(62,168,106,0.85); }
 
-    /* "Last updated" note pinned to the bottom of the fixtures card. */
-    .upcoming-updated {
-      font-size: 11px;
-      color: var(--muted);
-      text-align: right;
-      margin-top: 16px;
-      letter-spacing: 0.3px;
-    }
+    .scroll-note { font-size: 11px; font-weight: 500; color: var(--muted); margin-top: 6px; }
 
     /* =========================================================
-       LOADING STATE (pulsing gray placeholders)
-       Shown while match_data.json is being fetched, then removed.
+       HOME — HOW IT WORKS (3 small cards)
        ========================================================= */
-    .skeleton {
-      background: rgba(255, 255, 255, 0.06);
-      border-radius: 10px;
-      animation: pulse 1.3s ease-in-out infinite;
+    .how-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 560px) { .how-grid { grid-template-columns: repeat(3, 1fr); } }
+    .how-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 16px;
     }
-    @keyframes pulse {
-      0%, 100% { opacity: 0.45; }
-      50%      { opacity: 0.9; }
-    }
-    .sk-line  { height: 14px; margin: 10px 0; }
-    .sk-big   { height: 60px; margin: 14px 0; }
-    .sk-bar   { height: 16px; border-radius: 999px; margin: 20px 0; }
-    /* These two helpers show/hide whole sections depending on app state. */
-    .hidden { display: none !important; }
+    .how-emoji { font-size: 22px; }
+    .how-title { font-size: 14px; font-weight: 700; margin-top: 8px; }
+    .how-desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
-    /* The empty/error message box. */
-    .notice {
-      text-align: center;
+    /* =========================================================
+       MATCHES TAB — sub-tabs + vertical list
+       ========================================================= */
+    .subtabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .subtab {
+      flex: 1;
+      padding: 10px;
+      border-radius: 11px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
       color: var(--muted);
+      font-family: inherit;
       font-size: 14px;
-      padding: 8px 0;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, color 0.25s ease, border-color 0.25s ease, background-color 0.25s ease;
     }
-    .notice b { color: var(--text); }
+    .subtab.active { color: var(--text); border-color: var(--accent); background: rgba(var(--accent-rgb),0.08); }
+    .subtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    /* The footer credit line. */
-    .footer {
+    .mlist { display: flex; flex-direction: column; }
+    .mcard {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 14px;
+      border-radius: 12px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.3s ease;
+    }
+    .mcard:nth-child(even) { background: var(--card-bg-alt); }
+    .mcard:nth-child(odd)  { background: var(--card-bg); }
+    .mcard:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb),0.4); }
+    .mcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .mcard-tag {
+      flex: none;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      padding: 4px 8px;
+      border-radius: 7px;
+      background: rgba(var(--accent-rgb), 0.12);
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .mcard-body { flex: 1; min-width: 0; }
+    .mcard-players { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mcard-sub { font-size: 12px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mcard-time { flex: none; text-align: right; font-size: 13px; font-weight: 600; color: var(--accent); }
+    .mcard-time .no-time { color: var(--muted); font-weight: 500; }
+
+    /* pull-to-refresh visual */
+    .ptr {
+      height: 0;
+      overflow: hidden;
       text-align: center;
       color: var(--muted);
       font-size: 12px;
-      letter-spacing: 0.5px;
-      margin-top: 28px;
+      transition: height 0.3s ease;
     }
-    .footer-sub { margin-top: 6px; font-size: 11px; opacity: 0.75; }
+    .ptr.active { height: 34px; }
+    .ptr .spin {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(var(--accent-rgb),0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 7px;
+    }
 
-    /* Slightly bigger numbers on wider screens. */
+    /* =========================================================
+       ANALYSIS TAB
+       ========================================================= */
+    .back-link { margin-bottom: 12px; }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--card-border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    html[data-theme="light"] .status-pill { background: rgba(0,0,0,0.04); }
+    .status-pill .live-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #3ea86a; box-shadow: 0 0 8px rgba(62,168,106,0.9);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .an-head { text-align: center; }
+    .an-tournament { color: var(--accent); font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-top: 12px; }
+    .an-match { font-size: 22px; font-weight: 700; margin-top: 8px; }
+    .an-scoreline { font-size: 14px; color: var(--muted); margin-top: 6px; }
+
+    /* Win probability */
+    .wp-card { padding: 22px; }
+    @media (min-width: 480px) { .wp-card { padding: 28px; } }
+    .wp-head { display: flex; align-items: center; gap: 8px; position: relative; }
+    .help-btn {
+      width: 18px; height: 18px; border-radius: 50%;
+      border: 1px solid var(--card-border);
+      background: var(--card-bg);
+      color: var(--muted);
+      font-size: 11px; font-weight: 700;
+      cursor: pointer; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .help-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .tooltip {
+      position: absolute;
+      top: 26px; left: 0;
+      z-index: 20;
+      max-width: 280px;
+      background: var(--card-bg-alt);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.5;
+      color: var(--text);
+      box-shadow: var(--card-shadow);
+      display: none;
+    }
+    .tooltip.show { display: block; }
+    .wp-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 16px; }
+    .wp-side { flex: 1; min-width: 0; }
+    .wp-side.right { text-align: right; }
+    .wp-name { font-size: 16px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wp-pct { font-size: 64px; font-weight: 700; letter-spacing: -2px; line-height: 1; margin-top: 6px; }
+    .wp-pct.lead {
+      color: var(--accent);
+      background: linear-gradient(135deg, color-mix(in srgb, var(--accent), #ffffff 30%), var(--accent));
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+      text-shadow: 0 0 26px rgba(var(--accent-rgb), 0.45);
+    }
+    .momentum {
+      position: relative; height: 20px; border-radius: 999px;
+      background: var(--track); margin-top: 20px; overflow: hidden;
+    }
+    .momentum-fill {
+      position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.55), var(--accent));
+      box-shadow: 0 0 22px rgba(var(--accent-rgb),0.4);
+      transition: width 0.5s cubic-bezier(0.4,0,0.2,1), background-color 0.4s ease, box-shadow 0.4s ease;
+    }
+    .momentum-center {
+      position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
+      transform: translateX(-1px); background: rgba(255,255,255,0.35);
+    }
+    html[data-theme="light"] .momentum-center { background: rgba(0,0,0,0.30); }
+    .wp-foot { display: flex; justify-content: space-between; margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+    /* Pressure */
+    .pressure-item { margin-top: 18px; }
+    .pressure-item:first-of-type { margin-top: 16px; }
+    .pressure-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+    .pressure-name { font-size: 15px; font-weight: 600; }
+    .pressure-status { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
+    .pressure-status b { color: var(--text); font-weight: 600; }
+    .pdot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .pdot.calm { background: var(--muted); }
+    .pdot.building { background: rgba(var(--accent-rgb), 0.5); }
+    .pdot.high { background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb),0.6); }
+    .pbar { height: 14px; border-radius: 999px; background: var(--track); overflow: hidden; }
+    .pbar-fill {
+      height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent-rgb),0.55), var(--accent));
+      width: 0;
+      transition: width 0.5s cubic-bezier(0.4,0,0.2,1), background-color 0.4s ease;
+    }
+
+    /* Serve */
+    .serve-item { margin-top: 20px; }
+    .serve-item:first-of-type { margin-top: 16px; }
+    .serve-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+    .serve-name { font-size: 15px; font-weight: 600; }
+    .serve-dir { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; display: inline-flex; align-items: center; gap: 5px; }
+    .serve-dir.up { color: var(--accent); }
+    .serve-dir.down { color: var(--red); }
+    .serve-dir.steady { color: var(--muted); }
+    .serve-chart { width: 100%; height: auto; display: block; }
+    .serve-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .serve-dot { fill: var(--accent); }
+    .serve-area { fill: rgba(var(--accent-rgb), 0.16); stroke: none; }
+
+    .card-msg { text-align: center; color: var(--muted); font-size: 13px; padding: 18px 6px; }
+    .card-msg b { color: var(--text); display: block; margin-bottom: 4px; font-weight: 600; }
+
+    /* =========================================================
+       SHARE TAB
+       ========================================================= */
+    .share-preview {
+      display: flex;
+      justify-content: center;
+      padding: 8px 0 4px;
+    }
+    .share-preview canvas {
+      width: 300px;
+      height: auto;
+      border-radius: 14px;
+      border: 1px solid var(--card-border);
+      box-shadow: var(--card-shadow);
+    }
+    .share-actions { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+    .share-note { font-size: 11px; font-weight: 500; color: var(--muted); text-align: center; margin-top: 4px; }
+
+    /* =========================================================
+       EMPTY STATES
+       ========================================================= */
+    .empty {
+      text-align: center;
+      padding: 32px 12px;
+    }
+    .empty-ball {
+      font-size: 48px; line-height: 1; display: inline-block;
+      filter: drop-shadow(0 0 26px rgba(var(--accent-rgb), 0.5));
+      animation: floaty 3s ease-in-out infinite;
+    }
+    .empty-title { font-size: 16px; font-weight: 700; margin-top: 14px; }
+    .empty-sub { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .empty .btn { max-width: 220px; margin: 16px auto 0; }
+
+    /* =========================================================
+       SKELETONS (CSS-only shimmer)
+       ========================================================= */
+    .skeleton {
+      position: relative;
+      overflow: hidden;
+      background: rgba(255,255,255,0.05);
+      border-radius: 10px;
+    }
+    html[data-theme="light"] .skeleton { background: rgba(0,0,0,0.05); }
+    .skeleton::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(110deg, transparent 20%, rgba(255,255,255,0.08) 50%, transparent 80%);
+      animation: shimmer 1.8s infinite;
+    }
+    html[data-theme="light"] .skeleton::after {
+      background: linear-gradient(110deg, transparent 20%, rgba(0,0,0,0.05) 50%, transparent 80%);
+    }
+    .sk-line { height: 14px; margin: 10px 0; }
+    .sk-big  { height: 60px; margin: 14px 0; }
+    .sk-bar  { height: 18px; border-radius: 999px; margin: 18px 0; }
+    .sk-hcard { flex: none; width: 160px; height: 120px; border-radius: 14px; }
+    .sk-mcard { height: 64px; border-radius: 12px; margin-bottom: 10px; }
+    .hidden { display: none !important; }
+
+    /* =========================================================
+       TOAST (error notification)
+       ========================================================= */
+    .toast {
+      position: fixed;
+      top: 56px; left: 50%;
+      transform: translateX(-50%) translateY(-12px);
+      z-index: 100;
+      max-width: 90%;
+      background: var(--card-bg-alt);
+      border: 1px solid var(--card-border);
+      border-left: 3px solid var(--red);
+      border-radius: 10px;
+      padding: 11px 16px;
+      font-size: 13px;
+      color: var(--text);
+      box-shadow: var(--card-shadow);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* =========================================================
+       FOOTER
+       ========================================================= */
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 16px 0 24px;
+    }
+
+    /* =========================================================
+       BOTTOM NAV (fixed, 64px + safe area)
+       ========================================================= */
+    .bottomnav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 60;
+      height: 64px;
+      padding-bottom: env(safe-area-inset-bottom);
+      display: flex;
+      background: var(--nav-bg);
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    html[data-theme="light"] .bottomnav { border-top: 1px solid rgba(0,0,0,0.08); }
+    .navbtn {
+      flex: 1;
+      position: relative;
+      background: none;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      color: #7d8690;
+      font-family: inherit;
+      transition: color 0.25s ease;
+    }
+    .navbtn .nav-icon { font-size: 19px; line-height: 1; }
+    .navbtn .nav-label { font-size: 11px; font-weight: 500; }
+    .navbtn.active { color: var(--accent); }
+    .navbtn.active::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 30px; height: 2px;
+      background: var(--accent);
+      border-radius: 0 0 3px 3px;
+    }
+    .navbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+
+    /* =========================================================
+       KEYFRAMES + RESPONSIVE + REDUCED MOTION
+       ========================================================= */
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes shimmer { to { transform: translateX(100%); } }
+    @keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
     @media (min-width: 480px) {
-      .wp-pct { font-size: 68px; }
+      .wp-pct { font-size: 76px; }
       .wp-name { font-size: 18px; }
+      .feat-name { font-size: 24px; }
+      .an-match { font-size: 26px; }
+    }
+    @media (min-width: 640px) {
+      .hero { min-height: 160px; }
     }
 
-    /* Respect people who ask their device to reduce motion. */
     @media (prefers-reduced-motion: reduce) {
-      * { transition: none !important; animation: none !important; }
+      * { animation-duration: 0s !important; transition-duration: 0s !important; }
     }
   </style>
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="stack">
+  <!-- Toast / error notification -->
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-      <!-- ===== HEADER ===== -->
-      <header class="topbar">
-        <div class="brand">
-          <span class="brand-dot"></span>
-          <span>Break</span>
-        </div>
-        <div class="surface-pick">
-          <!-- Changing this dropdown re-themes the whole app. -->
-          <select id="surfaceSelect" aria-label="Court surface">
-            <option value="clay">Clay</option>
-            <option value="grass">Grass</option>
-            <option value="hard">Hardcourt</option>
-          </select>
-        </div>
-      </header>
-
-      <!-- ===== REFRESH LIVE DATA ===== -->
-      <!-- Tries to pull a live match from the Tennis API. If it can't
-           (network blocked, no live matches, bad response), it quietly
-           keeps showing whatever match is already on screen. -->
-      <section>
-        <button class="refresh-btn" id="refreshBtn">
-          <span class="spinner" id="refreshSpinner"></span>
-          <span id="refreshLabel">🔄 Refresh Live Data</span>
-        </button>
-        <div class="refresh-status" id="refreshStatus"></div>
-      </section>
-
-      <!-- ===== MATCH HEADER ===== -->
-      <section class="card match-head" id="matchHead">
-        <!-- Loading placeholder (skeleton). Replaced once data loads. -->
-        <div id="matchHeadSkeleton">
-          <div class="skeleton sk-line" style="width:40%;margin:0 auto;"></div>
-          <div class="skeleton sk-line" style="width:70%;margin:14px auto;"></div>
-        </div>
-        <div id="matchHeadContent" class="hidden">
-          <div class="tournament" id="tournament"></div>
-          <div class="matchname" id="matchname"></div>
-          <div class="status" id="status"></div>
-        </div>
-      </section>
-
-      <!-- ===== WIN PROBABILITY ===== -->
-      <section class="card" id="wpCard">
-        <div class="label">Win Probability</div>
-        <div id="wpSkeleton">
-          <div class="skeleton sk-big" style="width:100%;"></div>
-          <div class="skeleton sk-bar" style="width:100%;"></div>
-        </div>
-        <div id="wpContent" class="hidden">
-          <div class="wp-row" style="margin-top:14px;">
-            <div class="wp-side left">
-              <div class="wp-name" id="p1Name"></div>
-              <div class="wp-pct" id="p1Pct"></div>
-            </div>
-            <div class="wp-side right">
-              <div class="wp-name" id="p2Name"></div>
-              <div class="wp-pct" id="p2Pct"></div>
-            </div>
-          </div>
-          <!-- A subtle divider between the numbers and the momentum bar. -->
-          <div class="wp-divider"></div>
-          <!-- The momentum bar: fill width = player 1's win %. -->
-          <div class="momentum">
-            <div class="momentum-fill" id="momentumFill"></div>
-            <div class="momentum-center"></div>
-          </div>
-          <div class="wp-foot">
-            <span id="p1FootName"></span>
-            <span id="p2FootName"></span>
-          </div>
-        </div>
-      </section>
-
-      <!-- ===== PRESSURE METER ===== -->
-      <section class="card" id="pressureCard">
-        <div class="label">Pressure</div>
-        <div id="pressureSkeleton">
-          <div class="skeleton sk-line" style="width:30%;margin-top:16px;"></div>
-          <div class="skeleton sk-bar" style="width:100%;"></div>
-          <div class="skeleton sk-line" style="width:30%;"></div>
-          <div class="skeleton sk-bar" style="width:100%;"></div>
-        </div>
-        <div id="pressureContent" class="hidden"></div>
-      </section>
-
-      <!-- ===== SERVE QUALITY TREND ===== -->
-      <section class="card" id="serveCard">
-        <div class="label">Serve Quality Trend</div>
-        <div id="serveSkeleton">
-          <div class="skeleton sk-line" style="width:30%;margin-top:16px;"></div>
-          <div class="skeleton" style="width:100%;height:70px;margin:10px 0;"></div>
-          <div class="skeleton sk-line" style="width:30%;"></div>
-          <div class="skeleton" style="width:100%;height:70px;margin:10px 0;"></div>
-        </div>
-        <div id="serveContent" class="hidden"></div>
-      </section>
-
-      <!-- ===== UPCOMING MATCHES (fixtures) ===== -->
-      <!-- Hidden by default. Appears under the main match display when a
-           live refresh finds no live matches, listing today's/tomorrow's
-           scheduled ATP fixtures so you know what's coming. -->
-      <section class="card hidden" id="upcomingCard">
-        <div class="label" id="upcomingLabel">Upcoming Matches</div>
-        <div id="upcomingContent"></div>
-      </section>
-
-      <!-- ===== DOWNLOAD SHARE CARD ===== -->
-      <section>
-        <button class="download-btn" id="downloadBtn" disabled>Download Card</button>
-      </section>
-
-      <!-- Hidden canvas where the 1080x1350 share image is drawn. -->
-      <canvas id="shareCanvas" width="1080" height="1350" style="display:none;"></canvas>
-
-      <div class="footer">
-        <div>Break · momentum tracker</div>
-        <div class="footer-sub">Data via RapidAPI · Built by </div>
+  <!-- ===== STICKY TOP BAR ===== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span id="brandLive" class="brand-live hidden" aria-hidden="true"></span>
+      <span>Break</span>
+    </div>
+    <div class="topbar-right">
+      <button class="icon-btn" id="themeToggle" aria-label="Toggle dark or light mode">🌙</button>
+      <div class="surface-pick">
+        <select id="surfaceSelect" aria-label="Select court surface">
+          <option value="clay">Clay</option>
+          <option value="grass">Grass</option>
+          <option value="hard">Hardcourt</option>
+        </select>
       </div>
     </div>
+  </header>
+
+  <!-- ===== PERSISTENT NOW BAR ===== -->
+  <div class="nowbar" id="nowbar">
+    <span id="nowDot" class="live-dot hidden" aria-hidden="true"></span>
+    <span id="nowText">Loading the tour…</span>
   </div>
+
+  <!-- ===== CONTENT ===== -->
+  <main class="content">
+
+    <!-- ========== TAB 1: HOME ========== -->
+    <section id="tab-home" class="tab active" aria-label="Home">
+      <div class="stack">
+
+        <!-- Hero -->
+        <div class="hero">
+          <div class="hero-brand">
+            <span class="brand-dot" aria-hidden="true"></span>
+            <span>Break</span>
+          </div>
+          <div class="hero-tagline">Tennis momentum, decoded.</div>
+          <div class="hero-live hidden" id="heroLive">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span id="heroLiveText"></span>
+          </div>
+        </div>
+
+        <!-- Featured match -->
+        <div class="card featured" id="featuredCard" role="button" tabindex="0" aria-label="View featured match analysis">
+          <div class="feat-tournament" id="featTournament"></div>
+          <div class="feat-row">
+            <div class="feat-name" id="featName1"></div>
+            <div class="feat-scores" id="featScores1"></div>
+          </div>
+          <div class="feat-row">
+            <div class="feat-name" id="featName2"></div>
+            <div class="feat-scores" id="featScores2"></div>
+          </div>
+          <div class="feat-foot">
+            <span class="link-btn">View full analysis →</span>
+          </div>
+        </div>
+
+        <!-- Grand Slam countdown -->
+        <div class="card gs-card" id="gsCard">
+          <div class="gs-top">
+            <span class="gs-emoji" id="gsEmoji" aria-hidden="true">🎾</span>
+            <div class="gs-info">
+              <div class="gs-name" id="gsName"></div>
+              <div class="gs-date" id="gsDate"></div>
+            </div>
+            <div class="gs-count" id="gsCount"></div>
+          </div>
+          <div class="gs-progress"><div class="gs-progress-fill" id="gsProgress"></div></div>
+        </div>
+
+        <!-- Today's matches -->
+        <div>
+          <div class="section-title">Today's matches <span class="count" id="todayCount"></span></div>
+          <div class="pills" id="homePills" role="tablist" aria-label="Filter today's matches"></div>
+          <div id="todayCountdown"></div>
+          <div class="hscroll" id="todayScroll"></div>
+          <div id="todayEmpty" class="hidden"></div>
+          <div class="scroll-note">Times in venue local · Verify at flashscore.com</div>
+        </div>
+
+        <!-- How it works -->
+        <div>
+          <div class="section-title">How it works</div>
+          <div class="how-grid">
+            <div class="how-card">
+              <div class="how-emoji" aria-hidden="true">①</div>
+              <div class="how-title">Pick a match</div>
+              <div class="how-desc">Browse upcoming or recent matches.</div>
+            </div>
+            <div class="how-card">
+              <div class="how-emoji" aria-hidden="true">②</div>
+              <div class="how-title">See the momentum</div>
+              <div class="how-desc">Win probability, pressure, serve trends.</div>
+            </div>
+            <div class="how-card">
+              <div class="how-emoji" aria-hidden="true">③</div>
+              <div class="how-title">Share the insight</div>
+              <div class="how-desc">Download a premium share card.</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ========== TAB 2: MATCHES ========== -->
+    <section id="tab-matches" class="tab" aria-label="Matches">
+      <div class="subtabs">
+        <button class="subtab active" id="subUpcoming" aria-label="Upcoming matches">Upcoming</button>
+        <button class="subtab" id="subRecent" aria-label="Recent matches">Recent</button>
+      </div>
+
+      <button class="btn btn-outline" id="refreshBtn" style="margin-bottom:14px;">🔄 Refresh live data</button>
+      <div class="ptr" id="ptr"><span class="spin" aria-hidden="true"></span>Refreshing…</div>
+
+      <!-- Upcoming -->
+      <div id="upcomingView">
+        <div class="pills" id="matchPills" role="tablist" aria-label="Filter upcoming matches"></div>
+        <div class="mlist" id="upcomingList" style="margin-top:12px;"></div>
+        <div id="upcomingEmpty" class="hidden"></div>
+      </div>
+
+      <!-- Recent -->
+      <div id="recentView" class="hidden">
+        <div class="mlist" id="recentList"></div>
+        <div id="recentEmpty" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- ========== TAB 3: ANALYSIS ========== -->
+    <section id="tab-analysis" class="tab" aria-label="Analysis">
+      <div class="stack">
+        <div class="back-link">
+          <button class="link-btn" id="backToMatches">← Back to matches</button>
+        </div>
+
+        <div class="card an-head">
+          <div><span class="status-pill" id="anStatus"></span></div>
+          <div class="an-tournament" id="anTournament"></div>
+          <div class="an-match" id="anMatch"></div>
+          <div class="an-scoreline" id="anScoreline"></div>
+        </div>
+
+        <!-- Win probability -->
+        <div class="card wp-card">
+          <div class="wp-head">
+            <span class="label">Win probability</span>
+            <button class="help-btn" id="wpHelp" aria-label="How win probability is calculated">?</button>
+            <div class="tooltip" id="wpTooltip">Calculated from set scores, first serve %, aces, double faults, and break points. The momentum bar shows the balance between both players.</div>
+          </div>
+          <div id="wpBody"></div>
+        </div>
+
+        <!-- Pressure -->
+        <div class="card">
+          <div class="label">Pressure</div>
+          <div id="pressureBody"></div>
+        </div>
+
+        <!-- Serve trend -->
+        <div class="card">
+          <div class="label">Serve quality trend</div>
+          <div id="serveBody"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== TAB 4: SHARE ========== -->
+    <section id="tab-share" class="tab" aria-label="Share">
+      <div class="stack">
+        <div class="section-title">Share this match</div>
+        <div id="shareLoaded">
+          <div class="card">
+            <div class="share-preview" id="sharePreview"></div>
+          </div>
+          <div class="share-actions">
+            <button class="btn btn-primary" id="downloadBtn">Download card</button>
+            <button class="btn btn-outline" id="twitterBtn">Share to X / Twitter</button>
+            <button class="btn btn-outline" id="copyBtn">Copy link</button>
+          </div>
+          <div class="share-note">Card includes match stats, momentum visualization, and win probability — perfect for group chats and social media.</div>
+        </div>
+        <div id="shareEmpty" class="hidden empty">
+          <div class="empty-ball" aria-hidden="true">🎾</div>
+          <div class="empty-title">Load a match first to share</div>
+          <button class="btn btn-outline" id="shareGotoMatches">Browse matches</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer (shows under whichever tab is active) -->
+    <div class="footer">Data via RapidAPI · Times in venue local · Built by </div>
+  </main>
+
+  <!-- ===== BOTTOM NAV ===== -->
+  <nav class="bottomnav" role="tablist" aria-label="Main navigation">
+    <button class="navbtn active" data-tab="home" aria-label="Home tab" aria-current="page">
+      <span class="nav-icon" aria-hidden="true">🏠</span><span class="nav-label">Home</span>
+    </button>
+    <button class="navbtn" data-tab="matches" aria-label="Matches tab">
+      <span class="nav-icon" aria-hidden="true">🎾</span><span class="nav-label">Matches</span>
+    </button>
+    <button class="navbtn" data-tab="analysis" aria-label="Analysis tab">
+      <span class="nav-icon" aria-hidden="true">📊</span><span class="nav-label">Analysis</span>
+    </button>
+    <button class="navbtn" data-tab="share" aria-label="Share tab">
+      <span class="nav-icon" aria-hidden="true">📤</span><span class="nav-label">Share</span>
+    </button>
+  </nav>
+
+  <!-- Hidden canvas for the share card. -->
+  <canvas id="shareCanvas" width="1080" height="1350" style="display:none;"></canvas>
 
   <script>
   /* ===========================================================
-     STEP 0 — THE FALLBACK DATA
-     This is the exact Roland-Garros final data. If match_data.json
-     can't be loaded (e.g. opened straight from your computer, or the
-     file is missing), the app uses THIS instead so it never looks broken.
+     STEP 0 — FALLBACK DATA (the Roland-Garros final)
+     Roland-Garros 2026 Final: Sinner def. Alcaraz 6-3 3-6 6-7 6-4 6-4.
      =========================================================== */
   const FALLBACK_DATA = {
     "fetched_at_utc": "2026-06-13T00:00:00.000Z",
@@ -796,455 +1126,304 @@
         "tournament": "Roland-Garros · Final",
         "match_name": "Jannik Sinner vs Carlos Alcaraz",
         "status": "Completed · 5 sets",
+        "isLive": false,
+        "detailed": true,
         "players": [
           {
             "name": "Jannik Sinner",
-            "set_scores": [6, 3, 6, 4, 6],
-            "firstServePct": 68,
-            "aces": 14,
-            "doubleFaults": 2,
-            "bpFaced": 8,
-            "bpSaved": 6,
-            "serveTrend": [71, 68, 65, 63, 70]
+            "set_scores": [6, 3, 6, 6, 6],
+            "firstServePct": 68, "aces": 14, "doubleFaults": 2,
+            "bpFaced": 8, "bpSaved": 6, "serveTrend": [71, 68, 65, 63, 70]
           },
           {
             "name": "Carlos Alcaraz",
-            "set_scores": [3, 6, 7, 6, 4],
-            "firstServePct": 62,
-            "aces": 9,
-            "doubleFaults": 5,
-            "bpFaced": 11,
-            "bpSaved": 5,
-            "serveTrend": [64, 62, 60, 58, 55]
+            "set_scores": [3, 6, 7, 4, 4],
+            "firstServePct": 62, "aces": 9, "doubleFaults": 5,
+            "bpFaced": 11, "bpSaved": 5, "serveTrend": [64, 62, 60, 58, 55]
           }
         ],
         "deep_stats": {
           "stats_available": true,
-          "serve_stats": {
-            "first_serve_percentage": 65,
-            "aces": 23,
-            "double_faults": 7
-          },
-          "break_point_stats": {
-            "break_points_faced": 19,
-            "break_points_saved": 11
-          }
+          "serve_stats": { "first_serve_percentage": 65, "aces": 23, "double_faults": 7 },
+          "break_point_stats": { "break_points_faced": 19, "break_points_saved": 11 }
         }
       }
     ]
   };
 
-  /* A spot to remember the match we're showing, plus the computed numbers,
-     so the "Download Card" button can reuse them when drawing the image. */
+  // The match currently loaded into Analysis / Share.
   let CURRENT = null;
 
   /* ===========================================================
-     STEP 1 — SURFACE THEMING (clay / grass / hard)
-     We save the choice in localStorage so it sticks next visit.
+     STEP 1 — THEME (dark/light) + SURFACE
      =========================================================== */
+  const THEME_KEY = "break_theme";
   const SURFACE_KEY = "break_surface";
   const surfaceSelect = document.getElementById("surfaceSelect");
+  const themeToggle = document.getElementById("themeToggle");
 
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    themeToggle.textContent = theme === "light" ? "☀️" : "🌙";
+    localStorage.setItem(THEME_KEY, theme);
+  }
   function applySurface(surface) {
-    // Put the choice on the <html> tag. The CSS reads this to swap colors.
     document.documentElement.setAttribute("data-surface", surface);
     surfaceSelect.value = surface;
     localStorage.setItem(SURFACE_KEY, surface);
   }
 
-  // On first load: use the saved surface, or default to clay.
-  const savedSurface = localStorage.getItem(SURFACE_KEY) || "clay";
-  applySurface(savedSurface);
+  applyTheme(localStorage.getItem(THEME_KEY) || "dark");
+  applySurface(localStorage.getItem(SURFACE_KEY) || "clay");
 
-  // When the dropdown changes, re-theme instantly (CSS handles the smooth glide).
+  themeToggle.addEventListener("click", function () {
+    const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+    applyTheme(next);
+    if (activeTab === "share") drawSharePreview(); // re-tint the preview
+  });
   surfaceSelect.addEventListener("change", function () {
     applySurface(surfaceSelect.value);
+    if (activeTab === "share") drawSharePreview();
   });
 
   /* ===========================================================
-     STEP 2 — THE MATH
-     Three calculators: win probability, pressure, and serve trend.
+     STEP 2 — THE MATH (preserved exactly, just reused)
      =========================================================== */
-
-  // Count how many sets a player won by comparing their set scores
-  // to the opponent's, set by set.
   function setsWon(meScores, oppScores) {
     let count = 0;
-    for (let i = 0; i < meScores.length; i++) {
-      if (meScores[i] > oppScores[i]) count++;
-    }
+    for (let i = 0; i < meScores.length; i++) if (meScores[i] > oppScores[i]) count++;
     return count;
   }
-
-  // Add up all games a player won across every set.
   function totalGames(scores) {
     return scores.reduce(function (sum, g) { return sum + g; }, 0);
   }
-
-  // Turn one player's stats into a single "strength score".
   function strengthScore(me, opp) {
-    let score = 20; // base score
-
-    score += setsWon(me.set_scores, opp.set_scores) * 8;   // +8 per set won
-    score += totalGames(me.set_scores) * 2;                // +2 per game won
-    score += me.firstServePct * 0.3;                       // +0.3 per 1st-serve % point
-    score += me.aces * 1.5;                                // +1.5 per ace
-    score += me.doubleFaults * -1.5;                       // -1.5 per double fault
-    score += me.bpSaved * 2;                               // +2 per break point saved
-
-    const bpLost = me.bpFaced - me.bpSaved;                // break points lost
-    score += bpLost * -3;                                  // -3 per break point lost
-
+    let score = 20;
+    score += setsWon(me.set_scores, opp.set_scores) * 8;
+    score += totalGames(me.set_scores) * 2;
+    score += me.firstServePct * 0.3;
+    score += me.aces * 1.5;
+    score += me.doubleFaults * -1.5;
+    score += me.bpSaved * 2;
+    const bpLost = me.bpFaced - me.bpSaved;
+    score += bpLost * -3;
     return score;
   }
-
-  // Convert both strength scores into win % that add up to 100,
-  // and never go below 5% or above 95%.
   function winProbabilities(p1, p2) {
     const s1 = strengthScore(p1, p2);
     const s2 = strengthScore(p2, p1);
     const total = s1 + s2;
-
-    // Guard against dividing by zero in a weird edge case.
     let pct1 = total === 0 ? 50 : (s1 / total) * 100;
-
-    pct1 = Math.max(5, Math.min(95, pct1)); // clamp 5–95
-    const pct2 = 100 - pct1;
-
-    return {
-      p1: Math.round(pct1),
-      p2: Math.round(pct2)
-    };
+    pct1 = Math.max(5, Math.min(95, pct1));
+    return { p1: Math.round(pct1), p2: Math.round(100 - pct1) };
   }
-
-  // Pressure score (0–100) for one player, given their win %.
   function pressureScore(player, winPct) {
     let score = 0;
-    score += player.bpFaced * 8;                          // +8 per BP faced
+    score += player.bpFaced * 8;
     const bpUnsaved = player.bpFaced - player.bpSaved;
-    score += bpUnsaved * 15;                              // +15 per BP not saved
-
-    // Trailing in win probability adds up to +40 (only if behind).
+    score += bpUnsaved * 15;
     let trailing = (50 - winPct) * 0.8;
     trailing = Math.max(0, Math.min(40, trailing));
     score += trailing;
-
     return Math.max(0, Math.min(100, Math.round(score)));
   }
-
-  // Turn a pressure score into a word.
   function pressureLabel(score) {
     if (score <= 39) return "Calm";
     if (score <= 69) return "Building";
     return "High";
   }
-
-  // Decide if a serve trend is Improving / Dipping / Steady.
+  function pressureDotClass(score) {
+    if (score <= 39) return "calm";
+    if (score <= 69) return "building";
+    return "high";
+  }
   function serveDirection(trend) {
     if (!trend || trend.length < 2) return "Steady";
-    const diff = trend[trend.length - 1] - trend[0]; // last minus first
+    const diff = trend[trend.length - 1] - trend[0];
     if (diff >= 4) return "Improving";
     if (diff <= -4) return "Dipping";
     return "Steady";
   }
 
   /* ===========================================================
-     STEP 3 — BUILD A SERVE CHART (as an SVG string)
-     Simple line + shaded area + dots. No axes, no gridlines.
-     viewBox is 300x70. We map the data values into that box.
+     STEP 3 — SERVE CHART (preserved; 300x80 viewBox now)
      =========================================================== */
   function buildServeChart(trend) {
-    const W = 300, H = 70, PAD = 10; // drawing area with a little breathing room
-
-    // Live data often has no per-set serve trend. If we have fewer than 2
-    // points there's no line to draw, so show a calm "no data" placeholder
-    // instead of crashing.
+    const W = 300, H = 80, PAD = 12;
     if (!Array.isArray(trend) || trend.length < 2) {
       return '<svg class="serve-chart" viewBox="0 0 ' + W + ' ' + H +
              '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
-             '<line x1="' + PAD + '" y1="' + (H / 2) + '" x2="' + (W - PAD) +
-             '" y2="' + (H / 2) + '" stroke="var(--track)" stroke-width="2" ' +
-             'stroke-dasharray="4 5" stroke-linecap="round" />' +
-             '<text x="' + (W / 2) + '" y="' + (H / 2 - 8) +
-             '" fill="var(--muted)" font-size="11" text-anchor="middle" ' +
-             'font-family="Space Grotesk, sans-serif">No serve-trend data</text>' +
+             '<line x1="' + PAD + '" y1="' + (H/2) + '" x2="' + (W-PAD) + '" y2="' + (H/2) +
+             '" stroke="var(--track)" stroke-width="2" stroke-dasharray="4 5" stroke-linecap="round" />' +
+             '<text x="' + (W/2) + '" y="' + (H/2 + 22) + '" fill="var(--muted)" font-size="11" ' +
+             'text-anchor="middle" font-family="Space Grotesk, sans-serif">No serve-trend data for this match</text>' +
              '</svg>';
     }
-
     const min = Math.min.apply(null, trend);
     const max = Math.max.apply(null, trend);
-    const range = (max - min) || 1; // avoid divide-by-zero if all values equal
-
-    // Convert each data value into an (x, y) point inside the box.
+    const range = (max - min) || 1;
     const points = trend.map(function (val, i) {
       const x = PAD + (i / (trend.length - 1)) * (W - PAD * 2);
-      // Higher value = higher on the chart, so we flip y.
       const y = H - PAD - ((val - min) / range) * (H - PAD * 2);
       return { x: x, y: y };
     });
-
-    // The line path: move to the first point, then line to the rest.
     let linePath = "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
-    for (let i = 1; i < points.length; i++) {
-      linePath += " L " + points[i].x.toFixed(1) + " " + points[i].y.toFixed(1);
-    }
-
-    // The shaded area: same line, then drop down to the bottom and close.
+    for (let i = 1; i < points.length; i++) linePath += " L " + points[i].x.toFixed(1) + " " + points[i].y.toFixed(1);
     let areaPath = linePath +
-      " L " + points[points.length - 1].x.toFixed(1) + " " + (H - PAD) +
+      " L " + points[points.length-1].x.toFixed(1) + " " + (H - PAD) +
       " L " + points[0].x.toFixed(1) + " " + (H - PAD) + " Z";
-
-    // The little dots on each data point.
     let dots = "";
     points.forEach(function (p) {
-      dots += '<circle class="serve-dot" cx="' + p.x.toFixed(1) +
-              '" cy="' + p.y.toFixed(1) + '" r="3" />';
+      dots += '<circle class="serve-dot" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="4.5" />';
     });
-
     return '<svg class="serve-chart" viewBox="0 0 ' + W + ' ' + H +
            '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
            '<path class="serve-area" d="' + areaPath + '" />' +
-           '<path class="serve-line" d="' + linePath + '" />' +
-           dots +
-           '</svg>';
+           '<path class="serve-line" d="' + linePath + '" />' + dots + '</svg>';
   }
 
   /* ===========================================================
-     STEP 4 — RENDER EVERYTHING ON THE PAGE
-     Takes the match object, runs the math, fills in the HTML,
-     and hides the loading skeletons.
+     STEP 4 — SMALL UTILITIES
      =========================================================== */
-  function renderMatch(match) {
-    const p1 = match.players[0];
-    const p2 = match.players[1];
-
-    // --- Win probability ---
-    const wp = winProbabilities(p1, p2);
-    const p1Leads = wp.p1 >= wp.p2;
-
-    // --- Pressure ---
-    const pr1 = pressureScore(p1, wp.p1);
-    const pr2 = pressureScore(p2, wp.p2);
-
-    // Remember everything for the share card later.
-    CURRENT = {
-      match: match,
-      p1: p1, p2: p2,
-      wp: wp,
-      p1Leads: p1Leads,
-      pressure1: pr1, pressure2: pr2
-    };
-
-    // Match header. When the match is live, prefix the status pill with a
-    // gently pulsing green dot. Completed matches just show plain text.
-    document.getElementById("tournament").textContent = match.tournament;
-    document.getElementById("matchname").textContent = match.match_name;
-    const statusEl = document.getElementById("status");
-    if (match.isLive) {
-      statusEl.innerHTML = '<span class="live-dot"></span>' + escapeHtml(match.status);
-    } else {
-      statusEl.textContent = match.status;
-    }
-
-    // Win probability numbers + names
-    document.getElementById("p1Name").textContent = p1.name;
-    document.getElementById("p2Name").textContent = p2.name;
-    document.getElementById("p1Pct").textContent = wp.p1 + "%";
-    document.getElementById("p2Pct").textContent = wp.p2 + "%";
-    document.getElementById("p1FootName").textContent = p1.name;
-    document.getElementById("p2FootName").textContent = p2.name;
-
-    // Glow the leader's percentage.
-    document.getElementById("p1Pct").classList.toggle("lead", p1Leads);
-    document.getElementById("p2Pct").classList.toggle("lead", !p1Leads);
-
-    // The momentum bar width = player 1's win %.
-    document.getElementById("momentumFill").style.width = wp.p1 + "%";
-
-    // --- Pressure bars ---
-    const pressureHTML = [p1, p2].map(function (player, idx) {
-      const score = idx === 0 ? pr1 : pr2;
-      const label = pressureLabel(score);
-      return '' +
-        '<div class="pressure-item">' +
-          '<div class="pressure-top">' +
-            '<span class="pressure-name">' + player.name + '</span>' +
-            '<span class="pressure-status"><b>' + label + '</b> · ' + score + '</span>' +
-          '</div>' +
-          '<div class="pbar"><div class="pbar-fill" style="width:' + score + '%"></div></div>' +
-        '</div>';
-    }).join("");
-    document.getElementById("pressureContent").innerHTML = pressureHTML;
-
-    // --- Serve trend charts ---
-    const serveHTML = [p1, p2].map(function (player) {
-      const dir = serveDirection(player.serveTrend);
-      // Pick a colored arrow that matches the direction word.
-      const arrow = dir === "Improving"
-        ? '<span class="serve-arrow up">▲</span>'
-        : dir === "Dipping"
-        ? '<span class="serve-arrow down">▼</span>'
-        : '<span class="serve-arrow steady">→</span>';
-      return '' +
-        '<div class="serve-item">' +
-          '<div class="serve-top">' +
-            '<span class="serve-name">' + player.name + '</span>' +
-            '<span class="serve-dir">' + arrow + ' ' + dir + '</span>' +
-          '</div>' +
-          buildServeChart(player.serveTrend) +
-        '</div>';
-    }).join("");
-    document.getElementById("serveContent").innerHTML = serveHTML;
-
-    // --- Swap skeletons for real content ---
-    showContent();
-
-    // The card can be drawn now.
-    document.getElementById("downloadBtn").disabled = false;
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
+  function $(id) { return document.getElementById(id); }
 
-  // Hide all skeletons and reveal all the real content blocks.
-  function showContent() {
-    document.getElementById("matchHeadSkeleton").classList.add("hidden");
-    document.getElementById("matchHeadContent").classList.remove("hidden");
-    document.getElementById("wpSkeleton").classList.add("hidden");
-    document.getElementById("wpContent").classList.remove("hidden");
-    document.getElementById("pressureSkeleton").classList.add("hidden");
-    document.getElementById("pressureContent").classList.remove("hidden");
-    document.getElementById("serveSkeleton").classList.add("hidden");
-    document.getElementById("serveContent").classList.remove("hidden");
-  }
-
-  // If there is truly no match anywhere, show a calm message but stay tidy.
-  function renderEmpty() {
-    document.getElementById("matchHeadSkeleton").classList.add("hidden");
-    document.getElementById("matchHeadContent").classList.remove("hidden");
-    document.getElementById("tournament").textContent = "No match loaded";
-    document.getElementById("matchname").textContent = "Break is ready";
-    document.getElementById("status").textContent = "Add a match to see the analysis";
-
-    document.getElementById("wpSkeleton").innerHTML =
-      '<div class="notice">Drop a <b>match_data.json</b> file next to this page to see win probability, pressure, and serve trends.</div>';
-    document.getElementById("pressureSkeleton").innerHTML =
-      '<div class="notice">No pressure data yet.</div>';
-    document.getElementById("serveSkeleton").innerHTML =
-      '<div class="notice">No serve data yet.</div>';
+  // Toast for API failures.
+  let toastTimer = null;
+  function showToast(message) {
+    const t = $("toast");
+    t.textContent = message;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 4000);
   }
 
   /* ===========================================================
-     STEP 5 — LOAD THE DATA
-     Try match_data.json first. If anything goes wrong, fall back
-     to the hardcoded Roland-Garros final so the app always works.
+     STEP 5 — IMPORTANCE SORTING (tier → round → time)
      =========================================================== */
-  function pickMatch(data) {
-    // Make sure the data actually has a match inside it.
-    if (data && Array.isArray(data.matches) && data.matches.length > 0) {
-      return data.matches[0];
-    }
-    return null;
+  function classifyTournament(name) {
+    const t = (name || "").toLowerCase();
+    function has() { for (let i = 0; i < arguments.length; i++) if (t.indexOf(arguments[i]) !== -1) return true; return false; }
+    if (has("wimbledon", "roland garros", "roland-garros", "us open", "australian open")) return { tier: 1, badge: "slam" };
+    if (has("masters", "indian wells", "miami open", "monte-carlo", "monte carlo", "madrid", "rome", "canada", "cincinnati", "shanghai", "paris")) return { tier: 2, badge: "masters" };
+    if (has("500", "barcelona", "queen", "halle", "tokyo", "beijing", "vienna", "basel", "rio")) return { tier: 3, badge: "t500" };
+    if (has("250")) return { tier: 4, badge: "" };
+    if (has("challenger")) return { tier: 5, badge: "" };
+    if (has("itf", "m15", "m25", "w15", "w25")) return { tier: 6, badge: "" };
+    return { tier: 7, badge: "" };
   }
-
-  async function loadData() {
-    try {
-      // Try to fetch the real file sitting next to index.html.
-      const res = await fetch("match_data.json", { cache: "no-store" });
-      if (!res.ok) throw new Error("File responded with status " + res.status);
-      const data = await res.json();
-      const match = pickMatch(data);
-      if (!match) throw new Error("No matches inside the file");
-      renderMatch(match);
-    } catch (err) {
-      // Something failed (offline, missing file, opened via file:// etc).
-      // Use the hardcoded real match data instead.
-      console.warn("Using fallback data. Reason:", err.message);
-      const match = pickMatch(FALLBACK_DATA);
-      if (match) {
-        renderMatch(match);
-      } else {
-        renderEmpty();
-      }
-    }
+  function roundRank(round) {
+    const r = (round || "").toLowerCase();
+    if (r.indexOf("semi") !== -1) return 1;
+    if (r.indexOf("quarter") !== -1) return 2;
+    if (r.indexOf("final") !== -1) return 0;
+    if (r.indexOf("round") !== -1) return 3;
+    return 4;
   }
-
-  // Kick everything off.
-  loadData();
+  function surfaceEmoji(name) {
+    const t = (name || "").toLowerCase();
+    if (/(wimbledon|halle|queen|nottingham|hertogenbosch|rosmalen|stuttgart|eastbourne|mallorca|grass)/.test(t)) return "🌱";
+    if (/(roland|french|clay|monte|madrid|rome|barcelona|hamburg|kitzbuhel|gstaad|bastad|umag)/.test(t)) return "🎾";
+    if (/(open|hard|cincinnati|indian wells|miami|shanghai|beijing|tokyo|australian|us open|canada|dubai|acapulco)/.test(t)) return "🏟️";
+    return "🎾";
+  }
+  function badgeDotHtml(badge) {
+    if (badge === "slam") return '<span class="dot dot-slam" aria-hidden="true"></span>';
+    if (badge === "masters") return '<span class="dot dot-masters" aria-hidden="true"></span>';
+    if (badge === "t500") return '<span class="dot dot-500" aria-hidden="true"></span>';
+    return "";
+  }
+  function sortMatches(list) {
+    return list.slice().sort(function (a, b) {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      if (a.roundRank !== b.roundRank) return a.roundRank - b.roundRank;
+      const ta = a.startLocal ? a.startLocal.getTime() : Infinity;
+      const tb = b.startLocal ? b.startLocal.getTime() : Infinity;
+      return ta - tb;
+    });
+  }
 
   /* ===========================================================
-     STEP 5B — REFRESH LIVE DATA (from the Tennis API)
-     ------------------------------------------------------------
-     This calls the RapidAPI Tennis endpoint straight from the
-     browser. Two honest realities to know:
-       1) The API key below is visible to anyone who views this
-          page's source. That's unavoidable in a browser-only app.
-       2) Browsers often block direct calls to RapidAPI (a rule
-          called CORS). If that happens, the fetch fails and we
-          simply keep showing the Roland-Garros final, with a note.
-     Either way the app never breaks — worst case it falls back.
+     STEP 6 — TIME HELPERS (venue-local labels + countdown)
+     The API gives plain "HH:MM" venue-local clock times. We DISPLAY
+     them as-is (with a venue-local disclaimer), and build a best-effort
+     local Date only to drive the countdown + the "starting soon" dot.
      =========================================================== */
-  const LIVE_API_URL =
-    "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/extend/api/events/live/tennis/";
+  function dateString(offsetDays) {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  }
+  // Pretty 12-hour label from a raw "HH:MM" string, or null.
+  function prettyClock(raw) {
+    if (typeof raw !== "string") return null;
+    const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    let h = parseInt(m[1], 10);
+    const min = m[2];
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12; if (h === 0) h = 12;
+    return h + ":" + min + " " + ampm;
+  }
+  // Best-effort local Date for a "HH:MM" on a given day offset (for countdown).
+  function clockToLocalDate(raw, offsetDays) {
+    if (typeof raw !== "string") return null;
+    const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const d = new Date();
+    d.setDate(d.getDate() + (offsetDays || 0));
+    d.setHours(parseInt(m[1],10), parseInt(m[2],10), 0, 0);
+    return d;
+  }
+  function countdownText(target) {
+    const diff = target.getTime() - Date.now();
+    if (diff <= 0) return "Starting soon";
+    const totalMin = Math.floor(diff / 60000);
+    const h = Math.floor(totalMin / 60);
+    const mm = totalMin % 60;
+    if (h > 0 && mm > 0) return "Next match in " + h + "h " + mm + "m";
+    if (h > 0) return "Next match in " + h + "h";
+    return "Next match in " + mm + "m";
+  }
+
+  /* ===========================================================
+     STEP 7 — API CONFIG (preserved endpoints/headers/key)
+     =========================================================== */
+  const LIVE_API_URL = "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/extend/api/events/live/tennis/";
+  const FIXTURES_BASE = "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/fixtures/";
   const LIVE_API_HEADERS = {
     "x-rapidapi-key": "cf9e49b00amshb6126622a1dd5aep18a720jsn1ee2048ea169",
     "x-rapidapi-host": "tennis-api-atp-wta-itf.p.rapidapi.com"
   };
 
-  const refreshBtn = document.getElementById("refreshBtn");
-  const refreshSpinner = document.getElementById("refreshSpinner");
-  const refreshLabel = document.getElementById("refreshLabel");
-  const refreshStatus = document.getElementById("refreshStatus");
-
-  // Turn the button's loading spinner on/off.
-  function setRefreshLoading(isLoading) {
-    refreshBtn.disabled = isLoading;
-    refreshBtn.classList.toggle("loading", isLoading);
-    refreshLabel.textContent = isLoading ? "Refreshing…" : "🔄 Refresh Live Data";
-  }
-
-  // Show a small message under the button. "live=true" tints it the accent color.
-  function setRefreshStatus(message, isLive) {
-    refreshStatus.textContent = message || "";
-    refreshStatus.classList.toggle("live", !!isLive);
-  }
-
-  // --- Tiny helpers that read messy API data safely ---
-
-  // Return the first value found among several possible key names.
   function firstOf(obj, keys) {
     if (!obj) return undefined;
-    for (let i = 0; i < keys.length; i++) {
-      if (obj[keys[i]] !== undefined && obj[keys[i]] !== null) return obj[keys[i]];
-    }
+    for (let i = 0; i < keys.length; i++) if (obj[keys[i]] !== undefined && obj[keys[i]] !== null) return obj[keys[i]];
     return undefined;
   }
-
-  // The API might wrap the events list in different places. Find the array.
   function findEventsArray(data) {
     if (Array.isArray(data)) return data;
-    const candidate = firstOf(data, ["data", "events", "results", "matches", "response", "result"]);
-    if (Array.isArray(candidate)) return candidate;
-    // Sometimes it's nested one more level, e.g. { data: { events: [...] } }
-    if (candidate && typeof candidate === "object") {
-      const inner = firstOf(candidate, ["events", "results", "matches", "data"]);
+    const c = firstOf(data, ["data", "events", "results", "matches", "response", "result"]);
+    if (Array.isArray(c)) return c;
+    if (c && typeof c === "object") {
+      const inner = firstOf(c, ["events", "results", "matches", "data"]);
       if (Array.isArray(inner)) return inner;
     }
     return [];
   }
-
-  // Pull a readable player name out of whatever shape a "team/player" is.
   function readName(team) {
     if (!team) return null;
     if (typeof team === "string") return team;
-    const name = firstOf(team, ["name", "fullName", "player", "shortName", "title"]);
-    return name ? String(name) : null;
+    const n = firstOf(team, ["name", "fullName", "player", "shortName", "title"]);
+    return n ? String(n) : null;
   }
-
-  // Try to read set-by-set scores for one side. Returns an array like [6,3,6].
   function readSetScores(scoreObj) {
     if (!scoreObj) return [];
-    if (Array.isArray(scoreObj)) {
-      return scoreObj.map(Number).filter(function (n) { return !isNaN(n); });
-    }
-    // Common shape: { period1: 6, period2: 3, ... }
+    if (Array.isArray(scoreObj)) return scoreObj.map(Number).filter(function (n) { return !isNaN(n); });
     const sets = [];
     for (let i = 1; i <= 5; i++) {
       const v = firstOf(scoreObj, ["period" + i, "set" + i, "s" + i]);
@@ -1252,631 +1431,505 @@
     }
     return sets;
   }
-
-  // Turn ONE live event into a match object shaped exactly like Break expects.
-  // Live lists rarely include deep serve/break stats, so those default to 0
-  // and the serve-trend stays empty (the chart shows a "no data" placeholder).
-  function mapLiveEventToMatch(ev) {
-    // Find the two sides under any of these common key names.
-    const homeTeam = firstOf(ev, ["homeTeam", "home", "player1", "firstPlayer", "team1", "p1"]);
-    const awayTeam = firstOf(ev, ["awayTeam", "away", "player2", "secondPlayer", "team2", "p2"]);
-
-    let n1 = readName(homeTeam);
-    let n2 = readName(awayTeam);
-
-    // Fallback: some APIs use a "teams" array, or flat name fields.
+  function readNames(ev) {
+    const home = firstOf(ev, ["homeTeam", "home", "player1", "firstPlayer", "team1", "p1"]);
+    const away = firstOf(ev, ["awayTeam", "away", "player2", "secondPlayer", "team2", "p2"]);
+    let n1 = readName(home), n2 = readName(away);
     if ((!n1 || !n2) && Array.isArray(ev.teams) && ev.teams.length >= 2) {
-      n1 = n1 || readName(ev.teams[0]);
-      n2 = n2 || readName(ev.teams[1]);
+      n1 = n1 || readName(ev.teams[0]); n2 = n2 || readName(ev.teams[1]);
     }
     n1 = n1 || (typeof ev.event_first_player === "string" ? ev.event_first_player : null);
     n2 = n2 || (typeof ev.event_second_player === "string" ? ev.event_second_player : null);
+    return [n1, n2];
+  }
+  function readTournament(ev) {
+    return firstOf(ev, ["tournamentName"]) ||
+           readName(firstOf(ev, ["tournament", "league", "competition", "season"])) || "";
+  }
 
-    // No two names = not a match we can use.
-    if (!n1 || !n2) return null;
-
-    // Look for set scores under common spots.
+  // A live event → a fully-analysable match object (no deep stats though).
+  function mapLiveEventToMatch(ev) {
+    const names = readNames(ev);
+    if (!names[0] || !names[1]) return null;
     const homeScore = firstOf(ev, ["homeScore", "scoreHome", "score1", "homeSets", "p1Score"]);
     const awayScore = firstOf(ev, ["awayScore", "scoreAway", "score2", "awaySets", "p2Score"]);
-
     return {
-      tournament: String(
-        firstOf(ev, ["tournamentName"]) ||
-        readName(firstOf(ev, ["tournament", "league", "competition", "season"])) ||
-        "Live Tennis"
-      ),
-      match_name: n1 + " vs " + n2,
+      tournament: String(readTournament(ev) || "Live Tennis"),
+      match_name: names[0] + " vs " + names[1],
       status: String(firstOf(ev, ["statusText", "status", "round", "roundName"]) || "Live"),
-      isLive: true, // came from the live endpoint → show the pulsing live dot
+      isLive: true,
+      detailed: false,
       players: [
-        {
-          name: n1,
-          set_scores: readSetScores(homeScore),
-          firstServePct: 0, aces: 0, doubleFaults: 0,
-          bpFaced: 0, bpSaved: 0, serveTrend: []
-        },
-        {
-          name: n2,
-          set_scores: readSetScores(awayScore),
-          firstServePct: 0, aces: 0, doubleFaults: 0,
-          bpFaced: 0, bpSaved: 0, serveTrend: []
-        }
+        { name: names[0], set_scores: readSetScores(homeScore), firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] },
+        { name: names[1], set_scores: readSetScores(awayScore), firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] }
       ]
-      // No deep_stats on purpose — the share card will compute from players.
     };
   }
 
-  // The main action: fetch, parse, and either show live data or fall back.
-  async function refreshLiveData() {
-    setRefreshLoading(true);
-    setRefreshStatus("");
-    hideUpcoming(); // clear any previous fixtures list while we refresh
-
-    let foundLive = false;
-
-    try {
-      const res = await fetch(LIVE_API_URL, { headers: LIVE_API_HEADERS });
-      if (!res.ok) throw new Error("API status " + res.status);
-
-      const data = await res.json();
-      const events = findEventsArray(data);
-
-      // Try each event until we find one we can actually use.
-      let liveMatch = null;
-      for (let i = 0; i < events.length; i++) {
-        liveMatch = mapLiveEventToMatch(events[i]);
-        if (liveMatch) break;
-      }
-
-      if (liveMatch) {
-        renderMatch(liveMatch);
-        setRefreshStatus("● Live — " + liveMatch.match_name, true);
-        foundLive = true;
-      } else {
-        // API worked but had no usable live matches.
-        throw new Error("No usable live matches");
-      }
-    } catch (err) {
-      // Anything went wrong (blocked by browser/CORS, no live matches,
-      // bad data). Keep the app looking good with the known final.
-      console.warn("Live refresh failed. Reason:", err.message);
-      const fallback = pickMatch(FALLBACK_DATA);
-      if (fallback) renderMatch(fallback);
-      setRefreshStatus("No live matches right now — showing Roland-Garros final", false);
-    }
-
-    // If there's nothing live, look up what's scheduled next.
-    if (!foundLive) {
-      await loadFixtures();
-    }
-
-    setRefreshLoading(false);
-  }
-
-  /* ===========================================================
-     STEP 5C — UPCOMING MATCHES (the fixtures endpoint)
-     ------------------------------------------------------------
-     When nothing is live, we check ATP fixtures for today, then
-     tomorrow, and list whatever we find. Same CORS caveat as the
-     live call: if the browser blocks it, we show a friendly note
-     about the next Grand Slam instead.
-     =========================================================== */
-  const FIXTURES_BASE =
-    "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/fixtures/";
-
-  const upcomingCard = document.getElementById("upcomingCard");
-  const upcomingLabel = document.getElementById("upcomingLabel");
-  const upcomingContent = document.getElementById("upcomingContent");
-
-  // We keep one countdown timer running at a time. This holds its id so we
-  // can stop the old one before starting a new one (e.g. on each refresh).
-  let countdownTimer = null;
-
-  // Stop the live countdown if one is running.
-  function stopCountdown() {
-    if (countdownTimer !== null) {
-      clearInterval(countdownTimer);
-      countdownTimer = null;
-    }
-  }
-
-  // Hide the fixtures card entirely (used when a live match is showing).
-  function hideUpcoming() {
-    stopCountdown();
-    upcomingCard.classList.add("hidden");
-    upcomingContent.innerHTML = "";
-  }
-
-  // Build a YYYY-MM-DD string for "today + offsetDays" in the user's local time.
-  function dateString(offsetDays) {
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return yyyy + "-" + mm + "-" + dd;
-  }
-
-  /* ---- TIME CONVERSION (Part 1: do it properly) ---------------
-     Fixture times come back in each tournament's OWN local timezone —
-     which is NOT always Europe. So instead of assuming one offset we:
-
-       1) PREFER a real UTC anchor. If an event carries a unix timestamp,
-          or a full ISO datetime that ends in "Z" or "+hh:mm", that pins an
-          exact moment. new Date(...) on it converts to the viewer's OWN
-          timezone automatically — the ideal, always-correct fix.
-
-       2) OTHERWISE learn the venue's offset from an explicit timezone field,
-          or by mapping the location / country / tournament name to a known
-          summer-2026 offset (London = BST/UTC+1, Los Angeles = PDT/UTC-7,
-          Kansas = CDT/UTC-5, etc.). With that offset we still build an exact
-          moment from the date + "HH:MM".
-
-       3) If we know NEITHER, we don't guess. We show the raw clock tagged
-          "(venue local)" and add a note under the card. Honest beats
-          confidently wrong.
-  ------------------------------------------------------------ */
-
-  // Known venues → { off: minutes from UTC (June 2026), abbr, flag }.
-  // Used to convert times AND to show a flag + timezone label.
-  var VENUE_MAP = [
-    { kw: ["los angeles", "california", "san diego", "indian wells", "san jose", "stanford"], off: -420, abbr: "PDT", flag: "🇺🇸" },
-    { kw: ["new york", "washington", "cincinnati", "atlanta", "miami", "florida", "newport", "north carolina", "winston"], off: -240, abbr: "EDT", flag: "🇺🇸" },
-    { kw: ["kansas", "chicago", "dallas", "houston", "texas", "illinois", "missouri", "lawrence", "austin"], off: -300, abbr: "CDT", flag: "🇺🇸" },
-    { kw: ["toronto", "montreal", "canada", "ontario", "quebec"], off: -240, abbr: "EDT", flag: "🇨🇦" },
-    { kw: ["london", "england", "britain", "united kingdom", "nottingham", "eastbourne", "birmingham", "queen", "wimbledon", "ilkley", "surbiton", "manchester"], off: 60, abbr: "BST", flag: "🇬🇧" },
-    { kw: ["berlin", "germany", "stuttgart", "halle", "hamburg", "munich"], off: 120, abbr: "CEST", flag: "🇩🇪" },
-    { kw: ["paris", "france", "lyon", "metz", "marseille"], off: 120, abbr: "CEST", flag: "🇫🇷" },
-    { kw: ["madrid", "spain", "barcelona", "mallorca", "valencia", "sevilla"], off: 120, abbr: "CEST", flag: "🇪🇸" },
-    { kw: ["rome", "italy", "milan", "turin", "florence", "bologna"], off: 120, abbr: "CEST", flag: "🇮🇹" },
-    { kw: ["netherlands", "amsterdam", "hertogenbosch", "rosmalen", "rotterdam"], off: 120, abbr: "CEST", flag: "🇳🇱" },
-    { kw: ["geneva", "switzerland", "basel", "gstaad", "zurich"], off: 120, abbr: "CEST", flag: "🇨🇭" },
-    { kw: ["vienna", "austria", "kitzbuhel"], off: 120, abbr: "CEST", flag: "🇦🇹" },
-    { kw: ["tokyo", "japan", "osaka"], off: 540, abbr: "JST", flag: "🇯🇵" },
-    { kw: ["sydney", "melbourne", "australia", "brisbane", "adelaide", "perth"], off: 600, abbr: "AEST", flag: "🇦🇺" },
-    { kw: ["dubai", "abu dhabi", "emirates"], off: 240, abbr: "+04", flag: "🇦🇪" },
-    { kw: ["doha", "qatar"], off: 180, abbr: "+03", flag: "🇶🇦" },
-    { kw: ["beijing", "china", "shanghai", "chengdu", "zhuhai"], off: 480, abbr: "CST", flag: "🇨🇳" }
-  ];
-
-  // Known timezone abbreviations → minutes offset (summer where relevant).
-  var ABBR_OFFSETS = {
-    PDT: -420, PST: -480, MDT: -360, MST: -420, CDT: -300, CST: -360,
-    EDT: -240, EST: -300, BST: 60, GMT: 0, UTC: 0, WEST: 60,
-    CEST: 120, CET: 60, EEST: 180, JST: 540, AEST: 600, AEDT: 660, IST: 330
-  };
-
-  // Parse "+01:00" / "-0700" / "+5" into minutes, or null.
-  function parseOffsetString(s) {
-    var m = String(s).trim().match(/^([+-])(\d{1,2})(?::?(\d{2}))?$/);
-    if (!m) return null;
-    var sign = m[1] === "-" ? -1 : 1;
-    return sign * (parseInt(m[2], 10) * 60 + (m[3] ? parseInt(m[3], 10) : 0));
-  }
-
-  // Minutes offset → ISO suffix like "+02:00".
-  function offsetToIso(min) {
-    var sign = min >= 0 ? "+" : "-";
-    var a = Math.abs(min);
-    return sign + String(Math.floor(a / 60)).padStart(2, "0") + ":" + String(a % 60).padStart(2, "0");
-  }
-
-  // Does a keyword appear as a whole word in the haystack? Using boundaries
-  // (not naive substring) stops "challenger" matching "halle", etc.
-  function kwHit(hay, kw) {
-    var esc = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp("(^|[^a-z])" + esc + "([^a-z]|$)").test(hay);
-  }
-
-  // Map any location-ish text to a venue zone { off, abbr, flag } or null.
-  function venueZone(text) {
-    if (!text) return null;
-    var hay = String(text).toLowerCase();
-    for (var i = 0; i < VENUE_MAP.length; i++) {
-      var entry = VENUE_MAP[i];
-      for (var j = 0; j < entry.kw.length; j++) {
-        if (kwHit(hay, entry.kw[j])) {
-          return { off: entry.off, abbr: entry.abbr, flag: entry.flag };
-        }
-      }
-    }
-    return null;
-  }
-
-  // Look for an explicit timezone field the API might provide.
-  function explicitZone(ev) {
-    var tz = firstOf(ev, ["timezone", "timeZone", "tz", "venueTimezone", "tournamentTimezone", "utcOffset", "gmtOffset"]);
-    if (tz === undefined || tz === null) return null;
-    if (typeof tz === "number") {
-      var min = Math.abs(tz) <= 14 ? tz * 60 : tz; // hours vs minutes
-      return { off: min, abbr: offsetToIso(min) };
-    }
-    var s = String(tz).trim();
-    var asOffset = parseOffsetString(s);
-    if (asOffset !== null) return { off: asOffset, abbr: offsetToIso(asOffset) };
-    var upper = s.toUpperCase();
-    if (ABBR_OFFSETS.hasOwnProperty(upper)) return { off: ABBR_OFFSETS[upper], abbr: upper };
-    return venueZone(s.replace(/[\/_]/g, " ")); // e.g. "Europe/London"
-  }
-
-  // Combine clues into one zone guess { off, abbr, flag } or null.
-  function resolveZone(ev, locationText) {
-    var explicit = explicitZone(ev);
-    var venue = venueZone(locationText);
-    if (explicit && venue) return { off: explicit.off, abbr: explicit.abbr, flag: venue.flag };
-    return explicit || venue || null;
-  }
-
-  // CASE 1: find a precise UTC-anchored Date, or null.
-  function buildPreciseUtc(ev) {
-    var numKeys = ["startTimestamp", "timestamp", "utcTimestamp", "unixTime", "startUnix"];
-    for (var i = 0; i < numKeys.length; i++) {
-      var v = ev[numKeys[i]];
-      if (typeof v === "number" || (typeof v === "string" && /^\d{9,}$/.test(String(v).trim()))) {
-        var n = Number(v);
-        var d = new Date(n > 1e12 ? n : n * 1000); // seconds vs milliseconds
-        if (!isNaN(d.getTime())) return d;
-      }
-    }
-    var strKeys = ["startUtc", "utcTime", "utc", "startTime", "scheduled", "start", "dateTime", "datetime", "date"];
-    for (var k = 0; k < strKeys.length; k++) {
-      var s = ev[strKeys[k]];
-      if (typeof s === "string") {
-        var t = s.trim();
-        // Must be a full datetime AND carry its own zone (Z or ±hh:mm).
-        if (/\d{4}-\d{2}-\d{2}T/.test(t) && (/[zZ]$/.test(t) || /[+-]\d{2}:?\d{2}$/.test(t))) {
-          var dd = new Date(t);
-          if (!isNaN(dd.getTime())) return dd;
-        }
-      }
-    }
-    return null;
-  }
-
-  // Find a bare "HH:MM" wall-clock string (venue-local), or null.
-  function findClock(ev) {
-    var raw = firstOf(ev, ["time", "startTime", "scheduled", "start", "matchTime", "event_time", "localTime"]);
-    if (typeof raw === "string") {
-      var m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
-      if (m) return { hh: m[1].padStart(2, "0"), mm: m[2] };
-    }
-    return null;
-  }
-
-  // Decide whether a moment is Today / Tomorrow / a weekday, in local time.
-  function dayPrefix(date) {
-    const now = new Date();
-    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startTomorrow = new Date(startToday); startTomorrow.setDate(startToday.getDate() + 1);
-    const startDayAfter = new Date(startToday); startDayAfter.setDate(startToday.getDate() + 2);
-
-    if (date >= startToday && date < startTomorrow) return "Today";
-    if (date >= startTomorrow && date < startDayAfter) return "Tomorrow";
-    return date.toLocaleDateString([], { weekday: "short" }); // e.g. "Mon"
-  }
-
-  // Format just the clock part in the viewer's local timezone ("8:30 AM").
-  function localClock(date) {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-
-  // The viewer's own timezone abbreviation for a moment ("EDT", "BST", …).
-  function localTzAbbr(date) {
-    try {
-      var parts = new Intl.DateTimeFormat([], { timeZoneName: "short" }).formatToParts(date);
-      for (var i = 0; i < parts.length; i++) {
-        if (parts[i].type === "timeZoneName") return parts[i].value;
-      }
-    } catch (e) { /* older browsers: just skip the label */ }
-    return "";
-  }
-
-  // Escape API/user text before inserting into innerHTML (names can contain &, <, …).
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-
-  // Turn one fixture event into the small shape the list needs.
-  // We pass the requested date (to combine with a clock time) and a fallback
-  // day label for fixtures that have no time at all.
-  function mapFixture(ev, dateStr, fallbackDay) {
-    const homeTeam = firstOf(ev, ["homeTeam", "home", "player1", "firstPlayer", "team1", "p1"]);
-    const awayTeam = firstOf(ev, ["awayTeam", "away", "player2", "secondPlayer", "team2", "p2"]);
-
-    let n1 = readName(homeTeam);
-    let n2 = readName(awayTeam);
-    if ((!n1 || !n2) && Array.isArray(ev.teams) && ev.teams.length >= 2) {
-      n1 = n1 || readName(ev.teams[0]);
-      n2 = n2 || readName(ev.teams[1]);
-    }
-    n1 = n1 || (typeof ev.event_first_player === "string" ? ev.event_first_player : null);
-    n2 = n2 || (typeof ev.event_second_player === "string" ? ev.event_second_player : null);
-    if (!n1 || !n2) return null;
-
-    const tournament =
-      firstOf(ev, ["tournamentName"]) ||
-      readName(firstOf(ev, ["tournament", "league", "competition", "season"])) ||
-      "";
+  // A fixture event → a lightweight browse object (+ a match for tap-to-analyse).
+  function mapFixture(ev, dayOffset, completed) {
+    const names = readNames(ev);
+    if (!names[0] || !names[1]) return null;
+    const tournament = readTournament(ev);
     const round = firstOf(ev, ["round", "roundName", "tournament_round"]) || "";
+    const cls = classifyTournament(tournament);
+    const rawTime = firstOf(ev, ["startTime", "scheduled", "scheduledTime", "time", "matchTime", "start", "event_time"]);
+    const clockStr = (typeof rawTime === "string" && /^\d{1,2}:\d{2}$/.test(rawTime.trim())) ? rawTime.trim() : null;
 
     let sub = "";
     if (tournament && round) sub = tournament + " · " + round;
     else if (tournament) sub = String(tournament);
     else if (round) sub = String(round);
 
-    // Gather any location-ish text to guess the venue's timezone + flag.
-    const locationText = [
-      firstOf(ev, ["location", "venue", "city", "country", "countryName", "tournamentLocation"]),
-      tournament, round
-    ].filter(Boolean).join(" ");
-    const zone = resolveZone(ev, locationText);
-    const flag = zone && zone.flag ? zone.flag : "";
-
-    // CASE 1: a precise UTC anchor — the gold standard.
-    let startDate = buildPreciseUtc(ev);
-    let venueLocal = false;
-    let rawLocal = null;
-    let venueAbbr = zone ? zone.abbr : null;
-
-    if (!startDate) {
-      const clock = findClock(ev);
-      if (clock && zone) {
-        // CASE 2: no UTC anchor, but we know the venue offset → exact moment.
-        const iso = dateStr + "T" + clock.hh + ":" + clock.mm + ":00" + offsetToIso(zone.off);
-        const d = new Date(iso);
-        if (!isNaN(d.getTime())) startDate = d;
-      }
-      if (!startDate && clock) {
-        // CASE 3: clock but unknown zone → show it as venue-local, no guessing.
-        venueLocal = true;
-        rawLocal = clock.hh + ":" + clock.mm;
-      }
-    }
-
     return {
-      players: n1 + " vs " + n2,
+      players: names[0] + " vs " + names[1],
+      p1: names[0], p2: names[1],
+      tournament: tournament || "Tennis",
+      round: round,
       sub: sub,
-      flag: flag,
-      startDate: startDate,   // precise moment (case 1 or 2), or null
-      venueLocal: venueLocal, // true when we're showing an unconverted clock
-      rawLocal: rawLocal,     // the "HH:MM" string for case 3
-      venueAbbr: venueAbbr,   // tz label like "BST" if we could map it
-      fallbackDay: fallbackDay
+      tier: cls.tier,
+      badge: cls.badge,
+      roundRank: roundRank(round),
+      surfaceEmoji: surfaceEmoji(tournament),
+      clockLabel: prettyClock(clockStr),
+      startLocal: clockToLocalDate(clockStr, dayOffset),
+      completed: !!completed,
+      // The match object used if the user taps to analyse this fixture.
+      match: {
+        tournament: tournament || "Tennis",
+        match_name: names[0] + " vs " + names[1],
+        status: completed ? "Completed" : "Upcoming",
+        isLive: false,
+        detailed: false,
+        players: [
+          { name: names[0], set_scores: [], firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] },
+          { name: names[1], set_scores: [], firstServePct: 0, aces: 0, doubleFaults: 0, bpFaced: 0, bpSaved: 0, serveTrend: [] }
+        ]
+      }
     };
   }
 
-  // Fetch fixtures for one date. Returns an array of mapped fixtures, or [].
-  async function tryFixtures(dateStr, dayLabel) {
-    try {
-      const res = await fetch(FIXTURES_BASE + dateStr, { headers: LIVE_API_HEADERS });
-      if (!res.ok) throw new Error("Fixtures status " + res.status);
-      const data = await res.json();
-      const events = findEventsArray(data);
-      const list = [];
-      for (let i = 0; i < events.length; i++) {
-        const f = mapFixture(events[i], dateStr, dayLabel);
-        if (f) list.push(f);
-      }
-      return list;
-    } catch (err) {
-      console.warn("Fixtures fetch failed for " + dateStr + ". Reason:", err.message);
-      return [];
+  async function fetchFixtures(dayOffset, completed) {
+    const res = await fetch(FIXTURES_BASE + dateString(dayOffset), { headers: LIVE_API_HEADERS });
+    if (!res.ok) throw new Error("Fixtures status " + res.status);
+    const data = await res.json();
+    const events = findEventsArray(data);
+    const out = [];
+    for (let i = 0; i < events.length; i++) {
+      const f = mapFixture(events[i], dayOffset, completed);
+      if (f) out.push(f);
     }
+    return out;
   }
-
-  // Build the words for the countdown badge from a target start time.
-  function countdownText(target) {
-    const diffMs = target.getTime() - Date.now();
-    if (diffMs <= 0) return "Matches are underway";
-
-    const totalMin = Math.floor(diffMs / 60000);
-    const h = Math.floor(totalMin / 60);
-    const m = totalMin % 60;
-    if (h > 0 && m > 0) return "Next match in " + h + "h " + m + "m";
-    if (h > 0) return "Next match in " + h + "h";
-    return "Next match in " + m + "m";
-  }
-
-  // Start (or restart) the once-a-minute countdown ticking toward "target".
-  // Also fills a small progress bar over the final 6 hours before the start.
-  function startCountdown(target) {
-    stopCountdown(); // never stack two timers
-    const el = document.getElementById("countdownText");
-    if (!el) return;
-
-    const WINDOW = 6 * 60 * 60 * 1000; // progress bar spans the last 6 hours
-
-    function tick() {
-      const live = document.getElementById("countdownText");
-      if (!live) { stopCountdown(); return; } // card got replaced
-      live.textContent = countdownText(target);
-      const fill = document.getElementById("countdownProgress");
-      if (fill) {
-        const remaining = target.getTime() - Date.now();
-        let pct = 100 * (1 - remaining / WINDOW);
-        pct = Math.max(0, Math.min(100, pct));
-        fill.style.width = pct + "%";
-      }
-    }
-
-    tick();                                  // show immediately
-    countdownTimer = setInterval(tick, 60000); // then every 60 seconds
-  }
-
-  // Draw the list of fixtures into the Upcoming Matches card.
-  // "fetchedAt" is the Date the fixtures came back, for the "Last updated" note.
-  function renderUpcoming(fixtures, fetchedAt) {
-    stopCountdown();
-    upcomingLabel.textContent = "Upcoming Matches";
-
-    const now = Date.now();
-    const HOUR = 60 * 60 * 1000;
-
-    // Find the soonest match that hasn't started yet — that's our countdown target.
-    let nextStart = null;
-    let anyKnownTime = false;
-    fixtures.forEach(function (f) {
-      if (f.startDate) {
-        anyKnownTime = true;
-        if (f.startDate.getTime() > now && (!nextStart || f.startDate < nextStart)) {
-          nextStart = f.startDate;
-        }
-      }
-    });
-
-    const MAX = 12; // keep the list tidy
-    const shown = fixtures.slice(0, MAX);
-
-    // The countdown badge + progress bar (only if we actually know a time).
-    let badgeHtml = "";
-    if (nextStart) {
-      badgeHtml =
-        '<div class="countdown-wrap">' +
-          '<div class="countdown-badge"><span class="pulse-dot"></span>' +
-            '<span id="countdownText"></span></div>' +
-          '<div class="countdown-progress">' +
-            '<div class="countdown-progress-fill" id="countdownProgress"></div>' +
-          '</div>' +
-        '</div>';
-    } else if (anyKnownTime) {
-      // We have times but they're all in the past → matches are underway.
-      badgeHtml =
-        '<div class="countdown-wrap">' +
-          '<div class="countdown-badge"><span class="pulse-dot"></span>' +
-            '<span id="countdownText">Matches are underway</span></div>' +
-        '</div>';
-    }
-
-    // The match rows.
-    let venueLocalUsed = false;
-    const rowsHtml = shown.map(function (f) {
-      // Time label, three ways depending on what we could figure out:
-      let timeHtml;
-      if (f.startDate) {
-        // Converted to the viewer's local time; tag with THEIR tz abbr so
-        // "8:30 AM EDT" is unambiguous.
-        const abbr = localTzAbbr(f.startDate);
-        timeHtml = dayPrefix(f.startDate) + ", " + localClock(f.startDate) +
-          (abbr ? '<span class="tz-abbr">' + escapeHtml(abbr) + '</span>' : "");
-      } else if (f.venueLocal) {
-        // Unknown zone → show the raw clock untouched, tagged "(venue local)".
-        venueLocalUsed = true;
-        timeHtml = escapeHtml(f.rawLocal) +
-          (f.venueAbbr ? '<span class="tz-abbr">' + escapeHtml(f.venueAbbr) + '</span>' : "") +
-          ' <span class="venue-tag">(venue local)</span>';
-      } else {
-        timeHtml = '<span class="no-time">' + escapeHtml(f.fallbackDay) + ', TBD</span>';
-      }
-
-      // Green dot if this match starts within the next hour.
-      const soon = f.startDate &&
-        f.startDate.getTime() > now &&
-        (f.startDate.getTime() - now) <= HOUR;
-      const dotHtml = soon ? '<span class="soon-dot"></span>' : "";
-
-      // Flag emoji next to the tournament name, if we recognised the venue.
-      const flagHtml = f.flag ? f.flag + " " : "";
-      const subHtml = (f.sub || f.flag)
-        ? '<div class="upcoming-sub">' + flagHtml + escapeHtml(f.sub) + '</div>'
-        : "";
-
-      return '' +
-        '<div class="upcoming-item">' +
-          '<div class="upcoming-match">' +
-            '<div class="upcoming-players">' + dotHtml + escapeHtml(f.players) + '</div>' +
-            subHtml +
-          '</div>' +
-          '<div class="upcoming-time">' + timeHtml + '</div>' +
-        '</div>';
-    }).join("");
-
-    const moreHtml = fixtures.length > MAX
-      ? '<div class="upcoming-more">+ ' + (fixtures.length - MAX) + ' more scheduled</div>'
-      : "";
-
-    // Note when any time is shown unconverted, per the spec.
-    const noteHtml = venueLocalUsed
-      ? '<div class="upcoming-note">Times shown in venue local time.</div>'
-      : "";
-
-    // "Last updated" note showing when we fetched the fixtures.
-    const updatedHtml =
-      '<div class="upcoming-updated">Last updated: ' + localClock(fetchedAt) + '</div>';
-
-    upcomingContent.innerHTML =
-      badgeHtml +
-      '<div class="upcoming-list">' + rowsHtml + '</div>' +
-      moreHtml + noteHtml + updatedHtml;
-    upcomingCard.classList.remove("hidden");
-
-    // Now that the badge element exists in the page, start the live ticking.
-    if (nextStart) startCountdown(nextStart);
-  }
-
-  // Show the beautiful empty state in the card.
-  function showUpcomingMessage(subMessage) {
-    stopCountdown();
-    upcomingLabel.textContent = "Upcoming Matches";
-    upcomingContent.innerHTML =
-      '<div class="empty-state">' +
-        '<div class="empty-ball">🎾</div>' +
-        '<div class="empty-title">No matches right now</div>' +
-        (subMessage ? '<div class="empty-sub">' + escapeHtml(subMessage) + '</div>' : "") +
-      '</div>';
-    upcomingCard.classList.remove("hidden");
-  }
-
-  // Check today first, then tomorrow, then fall back to the message.
-  async function loadFixtures() {
-    stopCountdown();
-    // Brief loading hint inside the card.
-    upcomingLabel.textContent = "Upcoming Matches";
-    upcomingContent.innerHTML =
-      '<div class="skeleton sk-line" style="width:60%;margin-top:8px;"></div>' +
-      '<div class="skeleton sk-line" style="width:45%;"></div>';
-    upcomingCard.classList.remove("hidden");
-
-    let fixtures = await tryFixtures(dateString(0), "Today");
-
-    if (!fixtures || fixtures.length === 0) {
-      fixtures = await tryFixtures(dateString(1), "Tomorrow");
-    }
-
-    if (fixtures && fixtures.length > 0) {
-      // The moment we consider the data "fetched", for the Last updated note.
-      renderUpcoming(fixtures, new Date());
-    } else {
-      showUpcomingMessage("Next major event: Wimbledon, June 29.");
-    }
-  }
-
-  // Wire the button.
-  refreshBtn.addEventListener("click", refreshLiveData);
 
   /* ===========================================================
-     STEP 6 — THE SHARE CARD (drawn by hand on a canvas)
-     Builds a premium 1080x1350 PNG and downloads it.
+     STEP 8 — TAB NAVIGATION
      =========================================================== */
+  let activeTab = "home";
+  const navButtons = document.querySelectorAll(".navbtn");
 
-  // Read the current accent color straight from the CSS, so the card
-  // always matches whatever surface the user picked.
-  function currentAccent() {
-    return getComputedStyle(document.documentElement)
-      .getPropertyValue("--accent").trim() || "#e0723e";
+  function showTab(name) {
+    activeTab = name;
+    document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
+    $("tab-" + name).classList.add("active");
+
+    navButtons.forEach(function (btn) {
+      const on = btn.getAttribute("data-tab") === name;
+      btn.classList.toggle("active", on);
+      if (on) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+    });
+
+    // Now bar only on Home + Matches.
+    $("nowbar").classList.toggle("hidden", !(name === "home" || name === "matches"));
+
+    if (name === "share") drawSharePreview();
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  // Turn a hex color (#rrggbb) into an "r,g,b" string for see-through fills.
+  navButtons.forEach(function (btn) {
+    btn.addEventListener("click", function () { showTab(btn.getAttribute("data-tab")); });
+  });
+
+  /* ===========================================================
+     STEP 9 — GRAND SLAM COUNTDOWN
+     =========================================================== */
+  const SLAMS = [
+    { name: "Roland-Garros",    emoji: "🎾", surface: "clay",  start: "2026-05-24", end: "2026-06-07" },
+    { name: "Wimbledon",        emoji: "🌱", surface: "grass", start: "2026-06-29", end: "2026-07-12" },
+    { name: "US Open",          emoji: "🏟️", surface: "hard",  start: "2026-08-24", end: "2026-09-13" },
+    { name: "Australian Open",  emoji: "🏟️", surface: "hard",  start: "2027-01-18", end: "2027-02-01" },
+    { name: "Roland-Garros",    emoji: "🎾", surface: "clay",  start: "2027-05-23", end: "2027-06-06" }
+  ];
+  function parseYMD(s) { const p = s.split("-"); return new Date(+p[0], +p[1]-1, +p[2]); }
+  function fmtDate(d) {
+    return d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+  }
+  // Returns { slam, daysUntil, isLive, progress, prevEnd }.
+  function nextSlamInfo() {
+    const now = new Date();
+    // Is one live right now?
+    for (let i = 0; i < SLAMS.length; i++) {
+      const s = SLAMS[i], st = parseYMD(s.start), en = parseYMD(s.end);
+      en.setHours(23, 59, 59);
+      if (now >= st && now <= en) return { slam: s, isLive: true, daysUntil: 0, progress: 1 };
+    }
+    // Otherwise the next upcoming one.
+    for (let i = 0; i < SLAMS.length; i++) {
+      const s = SLAMS[i], st = parseYMD(s.start);
+      if (st > now) {
+        const prevEnd = i > 0 ? parseYMD(SLAMS[i-1].end) : new Date(now.getTime() - 86400000);
+        const span = st.getTime() - prevEnd.getTime();
+        const elapsed = now.getTime() - prevEnd.getTime();
+        const progress = Math.max(0, Math.min(1, elapsed / span));
+        const days = Math.ceil((st.getTime() - now.getTime()) / 86400000);
+        return { slam: s, isLive: false, daysUntil: days, progress: progress };
+      }
+    }
+    return { slam: SLAMS[SLAMS.length - 1], isLive: false, daysUntil: 0, progress: 1 };
+  }
+  function renderGrandSlam() {
+    const info = nextSlamInfo();
+    const s = info.slam;
+    $("gsEmoji").textContent = s.emoji;
+    $("gsName").textContent = s.name;
+    $("gsDate").textContent = fmtDate(parseYMD(s.start));
+    const countEl = $("gsCount");
+    if (info.isLive) {
+      countEl.textContent = "LIVE NOW";
+      countEl.classList.add("live");
+    } else {
+      countEl.classList.remove("live");
+      countEl.textContent = info.daysUntil <= 0 ? "Today" :
+        info.daysUntil === 1 ? "Starts tomorrow" : info.daysUntil + " days";
+    }
+    $("gsProgress").style.width = (info.progress * 100) + "%";
+    return info;
+  }
+
+  /* ===========================================================
+     STEP 10 — NOW BAR
+     =========================================================== */
+  function renderNowBar(liveMatches, gsInfo) {
+    const dot = $("nowDot"), text = $("nowText");
+    const liveCount = liveMatches ? liveMatches.length : 0;
+    if (gsInfo && gsInfo.isLive) {
+      dot.classList.remove("hidden");
+      text.textContent = "● " + gsInfo.slam.name + " is underway" +
+        (liveCount ? " · " + liveCount + " matches live" : "");
+      $("brandLive").classList.remove("hidden");
+    } else if (liveCount > 0) {
+      dot.classList.remove("hidden");
+      text.textContent = liveCount + (liveCount === 1 ? " match live" : " matches live");
+      $("brandLive").classList.add("hidden");
+    } else {
+      dot.classList.add("hidden");
+      $("brandLive").classList.add("hidden");
+      const days = gsInfo ? gsInfo.daysUntil : 0;
+      text.textContent = (days > 0 ? gsInfo.slam.name + " starts in " + days + " day" + (days === 1 ? "" : "s") + " · " : "") +
+        "No live matches right now";
+    }
+  }
+
+  /* ===========================================================
+     STEP 11 — FEATURED MATCH (Home)
+     =========================================================== */
+  function renderFeatured(match) {
+    const p1 = match.players[0], p2 = match.players[1];
+    const wp = winProbabilities(p1, p2);
+    const p1Leads = wp.p1 >= wp.p2;
+    $("featTournament").textContent = match.tournament;
+    $("featName1").textContent = p1.name;
+    $("featName2").textContent = p2.name;
+    $("featName1").classList.toggle("dim", !p1Leads);
+    $("featName2").classList.toggle("dim", p1Leads);
+    $("featScores1").innerHTML = p1.set_scores.map(function (g) { return "<span>" + g + "</span>"; }).join("");
+    $("featScores2").innerHTML = p2.set_scores.map(function (g) { return "<span>" + g + "</span>"; }).join("");
+  }
+
+  /* ===========================================================
+     STEP 12 — TODAY'S MATCHES (Home, horizontal)
+     =========================================================== */
+  const HOME_FILTERS = ["All", "ATP", "Grand Slams", "Challenger", "ITF"];
+  let homeFilter = "All";
+  let todayMatches = [];
+  let homeCountdownTimer = null;
+
+  function buildPills(container, filters, current, onPick) {
+    container.innerHTML = filters.map(function (f) {
+      return '<button class="pill' + (f === current ? " active" : "") + '" role="tab" aria-selected="' +
+             (f === current) + '">' + escapeHtml(f) + '</button>';
+    }).join("");
+    Array.prototype.forEach.call(container.querySelectorAll(".pill"), function (btn, i) {
+      btn.addEventListener("click", function () { onPick(filters[i]); });
+    });
+  }
+  function matchPassesFilter(m, filter) {
+    if (filter === "All") return true;
+    if (filter === "Grand Slams") return m.tier === 1;
+    if (filter === "Challenger") return m.tier === 5;
+    if (filter === "ITF") return m.tier === 6;
+    if (filter === "ATP") return m.tier >= 1 && m.tier <= 4;
+    if (filter === "WTA") return true; // API is ATP fixtures; WTA shown as all
+    return true;
+  }
+  function stopHomeCountdown() { if (homeCountdownTimer) { clearInterval(homeCountdownTimer); homeCountdownTimer = null; } }
+
+  function renderToday() {
+    const scroll = $("todayScroll"), empty = $("todayEmpty"), cd = $("todayCountdown");
+    const filtered = sortMatches(todayMatches.filter(function (m) { return matchPassesFilter(m, homeFilter); }));
+    $("todayCount").textContent = todayMatches.length ? "(" + todayMatches.length + ")" : "";
+
+    stopHomeCountdown();
+
+    if (filtered.length === 0) {
+      scroll.classList.add("hidden");
+      cd.innerHTML = "";
+      empty.classList.remove("hidden");
+      empty.innerHTML =
+        '<div class="empty"><div class="empty-ball" aria-hidden="true">🎾</div>' +
+        '<div class="empty-title">No matches scheduled today</div>' +
+        '<div class="empty-sub">Check the next Grand Slam below.</div></div>';
+      return;
+    }
+
+    empty.classList.add("hidden");
+    scroll.classList.remove("hidden");
+
+    // Countdown to the soonest upcoming match.
+    const now = Date.now();
+    let nextStart = null;
+    filtered.forEach(function (m) {
+      if (m.startLocal && m.startLocal.getTime() > now && (!nextStart || m.startLocal < nextStart)) nextStart = m.startLocal;
+    });
+    if (nextStart) {
+      cd.innerHTML = '<span class="countdown-badge"><span class="pulse-dot" aria-hidden="true"></span><span id="todayCdText"></span></span>';
+      const tick = function () {
+        const el = $("todayCdText");
+        if (!el) { stopHomeCountdown(); return; }
+        el.textContent = countdownText(nextStart);
+      };
+      tick();
+      homeCountdownTimer = setInterval(tick, 60000);
+    } else {
+      cd.innerHTML = "";
+    }
+
+    const HOUR = 3600000;
+    scroll.innerHTML = filtered.map(function (m, i) {
+      const soon = m.startLocal && m.startLocal.getTime() > now && (m.startLocal.getTime() - now) <= HOUR;
+      const dot = badgeDotHtml(m.badge) || (soon ? '<span class="dot dot-soon" aria-hidden="true"></span>' : "");
+      const timeLabel = m.clockLabel ? m.clockLabel : "TBD";
+      return '<div class="hcard" role="button" tabindex="0" data-idx="' + i + '">' +
+               '<div class="hcard-top">' + dot + '<span class="hcard-tour">' + escapeHtml(m.tournament) + '</span></div>' +
+               '<div class="hcard-players">' + escapeHtml(m.players) + '</div>' +
+               '<div class="hcard-time">' + m.surfaceEmoji + ' ' + escapeHtml(timeLabel) + '</div>' +
+             '</div>';
+    }).join("");
+
+    Array.prototype.forEach.call(scroll.querySelectorAll(".hcard"), function (card) {
+      const idx = +card.getAttribute("data-idx");
+      const open = function () { loadMatch(filtered[idx].match); showTab("analysis"); };
+      card.addEventListener("click", open);
+      card.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    });
+  }
+
+  function showTodaySkeleton() {
+    $("todayEmpty").classList.add("hidden");
+    $("todayScroll").classList.remove("hidden");
+    $("todayScroll").innerHTML = "";
+    for (let i = 0; i < 4; i++) $("todayScroll").innerHTML += '<div class="skeleton sk-hcard"></div>';
+  }
+
+  /* ===========================================================
+     STEP 13 — MATCHES TAB (upcoming + recent vertical lists)
+     =========================================================== */
+  const MATCH_FILTERS = ["All", "ATP", "WTA", "Grand Slams", "Challenger", "ITF"];
+  let matchFilter = "All";
+  let upcomingMatches = [];
+  let recentMatches = [];
+
+  function renderMatchList(container, list, emptyEl, emptyHtml) {
+    const sorted = sortMatches(list);
+    if (sorted.length === 0) {
+      container.innerHTML = "";
+      emptyEl.classList.remove("hidden");
+      emptyEl.innerHTML = emptyHtml;
+      bindEmptyButtons(emptyEl);
+      return;
+    }
+    emptyEl.classList.add("hidden");
+    container.innerHTML = sorted.map(function (m, i) {
+      const timeHtml = m.clockLabel
+        ? escapeHtml(m.clockLabel) + ' <span class="no-time" style="display:block;font-size:10px;">venue local</span>'
+        : '<span class="no-time">TBD</span>';
+      return '<div class="mcard" role="button" tabindex="0" data-idx="' + i + '">' +
+               badgeDotHtml(m.badge) +
+               '<span class="mcard-tag">' + escapeHtml(m.tournament.split(" ")[0]) + '</span>' +
+               '<div class="mcard-body">' +
+                 '<div class="mcard-players">' + escapeHtml(m.players) + '</div>' +
+                 '<div class="mcard-sub">' + m.surfaceEmoji + ' ' + escapeHtml(m.sub) + '</div>' +
+               '</div>' +
+               '<div class="mcard-time">' + timeHtml + '</div>' +
+             '</div>';
+    }).join("");
+    Array.prototype.forEach.call(container.querySelectorAll(".mcard"), function (card) {
+      const idx = +card.getAttribute("data-idx");
+      const open = function () { loadMatch(sorted[idx].match); showTab("analysis"); };
+      card.addEventListener("click", open);
+      card.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    });
+  }
+
+  function bindEmptyButtons(scope) {
+    const refresh = scope.querySelector("[data-action='refresh']");
+    if (refresh) refresh.addEventListener("click", refreshAll);
+    const classic = scope.querySelector("[data-action='classic']");
+    if (classic) classic.addEventListener("click", function () { loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); });
+  }
+
+  function renderUpcoming() {
+    const filtered = upcomingMatches.filter(function (m) { return matchPassesFilter(m, matchFilter); });
+    renderMatchList($("upcomingList"), filtered, $("upcomingEmpty"),
+      '<div class="empty"><div class="empty-ball" aria-hidden="true">🎾</div>' +
+      '<div class="empty-title">No upcoming matches found</div>' +
+      '<button class="btn btn-outline" data-action="refresh">Refresh</button></div>');
+  }
+  function renderRecent() {
+    renderMatchList($("recentList"), recentMatches, $("recentEmpty"),
+      '<div class="empty"><div class="empty-ball" aria-hidden="true">🎾</div>' +
+      '<div class="empty-title">No recent matches found</div>' +
+      '<div class="empty-sub">Revisit a classic instead.</div>' +
+      '<button class="btn btn-outline" data-action="classic">View this classic final</button></div>');
+  }
+
+  function showListSkeleton(container, n) {
+    container.innerHTML = "";
+    for (let i = 0; i < n; i++) container.innerHTML += '<div class="skeleton sk-mcard"></div>';
+  }
+
+  // Matches sub-tabs
+  $("subUpcoming").addEventListener("click", function () {
+    $("subUpcoming").classList.add("active"); $("subRecent").classList.remove("active");
+    $("upcomingView").classList.remove("hidden"); $("recentView").classList.add("hidden");
+  });
+  $("subRecent").addEventListener("click", function () {
+    $("subRecent").classList.add("active"); $("subUpcoming").classList.remove("active");
+    $("recentView").classList.remove("hidden"); $("upcomingView").classList.add("hidden");
+    if (recentMatches.length === 0) loadRecent();
+  });
+
+  /* ===========================================================
+     STEP 14 — ANALYSIS RENDER
+     =========================================================== */
+  function loadMatch(match) {
+    CURRENT = match;
+    renderAnalysis(match);
+  }
+  function statusPillHtml(match) {
+    if (match.isLive) return '<span class="live-dot" aria-hidden="true"></span>Live';
+    if (/complete/i.test(match.status)) return "Completed";
+    if (/upcoming/i.test(match.status)) return "Upcoming";
+    return escapeHtml(match.status || "Match");
+  }
+  function noStatsMsg() {
+    return '<div class="card-msg"><b>Detailed stats unavailable for this match</b>' +
+           'Full analysis is available for completed matches with hardcoded or scraped data.</div>';
+  }
+
+  function renderAnalysis(match) {
+    const p1 = match.players[0], p2 = match.players[1];
+
+    $("anStatus").innerHTML = statusPillHtml(match);
+    $("anTournament").textContent = match.tournament;
+    $("anMatch").textContent = match.match_name;
+    // Scoreline (if any sets present).
+    if (p1.set_scores.length) {
+      const line = p1.set_scores.map(function (g, i) { return g + "-" + (p2.set_scores[i] != null ? p2.set_scores[i] : "?"); }).join("  ");
+      $("anScoreline").textContent = line;
+    } else {
+      $("anScoreline").textContent = "";
+    }
+
+    // If a match has no detailed stats, show messages instead of empty boxes.
+    if (match.detailed === false) {
+      $("wpBody").innerHTML = noStatsMsg();
+      $("pressureBody").innerHTML = noStatsMsg();
+      $("serveBody").innerHTML = noStatsMsg();
+      return;
+    }
+
+    // --- Win probability ---
+    const wp = winProbabilities(p1, p2);
+    const p1Leads = wp.p1 >= wp.p2;
+    $("wpBody").innerHTML =
+      '<div class="wp-row">' +
+        '<div class="wp-side left"><div class="wp-name">' + escapeHtml(p1.name) + '</div>' +
+          '<div class="wp-pct' + (p1Leads ? " lead" : "") + '">' + wp.p1 + '%</div></div>' +
+        '<div class="wp-side right"><div class="wp-name">' + escapeHtml(p2.name) + '</div>' +
+          '<div class="wp-pct' + (!p1Leads ? " lead" : "") + '">' + wp.p2 + '%</div></div>' +
+      '</div>' +
+      '<div class="momentum"><div class="momentum-fill" id="momFill"></div><div class="momentum-center"></div></div>' +
+      '<div class="wp-foot"><span>' + escapeHtml(p1.name) + '</span><span>' + escapeHtml(p2.name) + '</span></div>';
+    // Animate the fill on the next frame.
+    requestAnimationFrame(function () { const f = $("momFill"); if (f) f.style.width = wp.p1 + "%"; });
+
+    // --- Pressure ---
+    const pr1 = pressureScore(p1, wp.p1), pr2 = pressureScore(p2, wp.p2);
+    $("pressureBody").innerHTML = [[p1, pr1], [p2, pr2]].map(function (pair) {
+      const player = pair[0], score = pair[1];
+      const label = pressureLabel(score), dotc = pressureDotClass(score);
+      return '<div class="pressure-item">' +
+               '<div class="pressure-top"><span class="pressure-name">' + escapeHtml(player.name) + '</span>' +
+               '<span class="pressure-status"><span class="pdot ' + dotc + '" aria-hidden="true"></span><b>' + label + '</b> · ' + score + '</span></div>' +
+               '<div class="pbar"><div class="pbar-fill" data-w="' + score + '"></div></div>' +
+             '</div>';
+    }).join("");
+    requestAnimationFrame(function () {
+      Array.prototype.forEach.call(document.querySelectorAll("#pressureBody .pbar-fill"), function (el) {
+        el.style.width = el.getAttribute("data-w") + "%";
+      });
+    });
+
+    // --- Serve trend ---
+    $("serveBody").innerHTML = [p1, p2].map(function (player) {
+      const dir = serveDirection(player.serveTrend);
+      const cls = dir === "Improving" ? "up" : dir === "Dipping" ? "down" : "steady";
+      const arrow = dir === "Improving" ? "▲" : dir === "Dipping" ? "▼" : "→";
+      return '<div class="serve-item">' +
+               '<div class="serve-top"><span class="serve-name">' + escapeHtml(player.name) + '</span>' +
+               '<span class="serve-dir ' + cls + '">' + arrow + ' ' + dir + '</span></div>' +
+               buildServeChart(player.serveTrend) +
+             '</div>';
+    }).join("");
+  }
+
+  // Win-probability "?" tooltip.
+  $("wpHelp").addEventListener("click", function (e) {
+    e.stopPropagation();
+    $("wpTooltip").classList.toggle("show");
+  });
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest(".wp-head")) $("wpTooltip").classList.remove("show");
+  });
+
+  $("backToMatches").addEventListener("click", function () { showTab("matches"); });
+  $("featuredCard").addEventListener("click", function () { loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); });
+  $("featuredCard").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); loadMatch(FALLBACK_DATA.matches[0]); showTab("analysis"); }
+  });
+
+  /* ===========================================================
+     STEP 15 — SHARE CANVAS (preserved premium 1080x1350 card)
+     =========================================================== */
+  function currentAccent() {
+    return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#e07b3e";
+  }
   function hexToRgb(hex) {
     const h = hex.replace("#", "");
-    const r = parseInt(h.substring(0, 2), 16);
-    const g = parseInt(h.substring(2, 4), 16);
-    const b = parseInt(h.substring(4, 6), 16);
-    return r + "," + g + "," + b;
+    return parseInt(h.substring(0,2),16) + "," + parseInt(h.substring(2,4),16) + "," + parseInt(h.substring(4,6),16);
   }
-
-  // Helper: draw a rounded rectangle path (used for the momentum bar).
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -1886,190 +1939,301 @@
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
   }
-
-  async function drawShareCard() {
+  async function renderShareCanvas() {
     if (!CURRENT) return;
+    if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch (e) {} }
 
-    // Wait for the Space Grotesk font to be ready so canvas text uses it.
-    if (document.fonts && document.fonts.ready) {
-      try { await document.fonts.ready; } catch (e) { /* ignore */ }
-    }
-
-    const canvas = document.getElementById("shareCanvas");
+    const canvas = $("shareCanvas");
     const ctx = canvas.getContext("2d");
     const W = 1080, H = 1350;
-
     const accent = currentAccent();
     const accentRgb = hexToRgb(accent);
-    const match = CURRENT.match;
-    const p1 = CURRENT.p1, p2 = CURRENT.p2;
-    const wp = CURRENT.wp;
-    const leader = CURRENT.p1Leads ? p1 : p2;
-    const leaderPct = CURRENT.p1Leads ? wp.p1 : wp.p2;
+    const match = CURRENT;
+    const p1 = match.players[0], p2 = match.players[1];
+    const wp = winProbabilities(p1, p2);
+    const p1Leads = wp.p1 >= wp.p2;
+    const leader = p1Leads ? p1 : p2;
+    const leaderPct = p1Leads ? wp.p1 : wp.p2;
 
-    // --- 1) Dark background ---
     ctx.fillStyle = "#0b0d0f";
     ctx.fillRect(0, 0, W, H);
-
-    // --- 2) Soft radial glow from the top-right corner ---
     const glow = ctx.createRadialGradient(W - 120, 60, 60, W - 120, 60, 720);
     glow.addColorStop(0, "rgba(" + accentRgb + ",0.30)");
     glow.addColorStop(1, "rgba(" + accentRgb + ",0)");
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, W, H);
-
-    // --- 3) Thin accent bar across the very top ---
     ctx.fillStyle = accent;
     ctx.fillRect(0, 0, W, 8);
 
-    const M = 80; // left/right margin used throughout the card
-
-    // --- 4) BREAK wordmark + colored dot ---
+    const M = 80;
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = accent;
-    ctx.beginPath();
-    ctx.arc(M + 9, 92, 12, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(M + 9, 92, 12, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = "#f4f6f7";
     ctx.font = "700 40px 'Space Grotesk', sans-serif";
     ctx.textAlign = "left";
     ctx.fillText("BREAK", M + 32, 105);
 
-    // --- 5) Tournament name (muted uppercase) ---
     ctx.fillStyle = "#8a929b";
     ctx.font = "600 24px 'Space Grotesk', sans-serif";
-    ctx.fillText(match.tournament.toUpperCase(), M, 160);
+    ctx.fillText(String(match.tournament).toUpperCase(), M, 160);
 
-    // --- 6) Both player names with set scores aligned right ---
     function fmtScores(scores) { return scores.join("  "); }
+    ctx.font = "700 50px 'Space Grotesk', sans-serif";
+    ctx.fillStyle = p1Leads ? "#f4f6f7" : "#8a929b";
+    ctx.textAlign = "left"; ctx.fillText(p1.name, M, 270);
+    ctx.textAlign = "right"; ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 44px 'Space Grotesk', sans-serif"; ctx.fillText(fmtScores(p1.set_scores), W - M, 270);
 
     ctx.font = "700 50px 'Space Grotesk', sans-serif";
-    ctx.fillStyle = CURRENT.p1Leads ? "#f4f6f7" : "#8a929b";
-    ctx.textAlign = "left";
-    ctx.fillText(p1.name, M, 270);
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#f4f6f7";
-    ctx.font = "600 44px 'Space Grotesk', sans-serif";
-    ctx.fillText(fmtScores(p1.set_scores), W - M, 270);
+    ctx.fillStyle = p1Leads ? "#8a929b" : "#f4f6f7";
+    ctx.textAlign = "left"; ctx.fillText(p2.name, M, 340);
+    ctx.textAlign = "right"; ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 44px 'Space Grotesk', sans-serif"; ctx.fillText(fmtScores(p2.set_scores), W - M, 340);
 
-    ctx.font = "700 50px 'Space Grotesk', sans-serif";
-    ctx.fillStyle = CURRENT.p1Leads ? "#8a929b" : "#f4f6f7";
-    ctx.textAlign = "left";
-    ctx.fillText(p2.name, M, 340);
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#f4f6f7";
-    ctx.font = "600 44px 'Space Grotesk', sans-serif";
-    ctx.fillText(fmtScores(p2.set_scores), W - M, 340);
-
-    // --- 7) "WIN PROBABILITY" label + giant percentage ---
     ctx.textAlign = "center";
     ctx.fillStyle = "#8a929b";
     ctx.font = "600 26px 'Space Grotesk', sans-serif";
     ctx.fillText("WIN PROBABILITY", W / 2, 470);
-
-    // The giant number in the accent color.
     ctx.fillStyle = accent;
     ctx.font = "700 210px 'Space Grotesk', sans-serif";
     ctx.fillText(leaderPct + "%", W / 2, 660);
-
-    // "[Player] to win"
     ctx.fillStyle = "#f4f6f7";
     ctx.font = "600 36px 'Space Grotesk', sans-serif";
     ctx.fillText(leader.name + " to win", W / 2, 730);
 
-    // --- 8) Momentum bar (matches the live UI) ---
     const barX = M, barY = 800, barW = W - M * 2, barH = 26;
-    // Track
     ctx.fillStyle = "rgba(255,255,255,0.08)";
-    roundRect(ctx, barX, barY, barW, barH, barH / 2);
-    ctx.fill();
-    // Fill = player 1's win %
+    roundRect(ctx, barX, barY, barW, barH, barH / 2); ctx.fill();
     const fillW = Math.max(barH, barW * (wp.p1 / 100));
     const barGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
     barGrad.addColorStop(0, "rgba(" + accentRgb + ",0.55)");
     barGrad.addColorStop(1, accent);
     ctx.fillStyle = barGrad;
-    roundRect(ctx, barX, barY, fillW, barH, barH / 2);
-    ctx.fill();
-    // Center "net" line
+    roundRect(ctx, barX, barY, fillW, barH, barH / 2); ctx.fill();
     ctx.fillStyle = "rgba(255,255,255,0.45)";
     ctx.fillRect(barX + barW / 2 - 1, barY, 2, barH);
 
-    // --- 9) Three stat columns (match totals from deep_stats) ---
     const ds = match.deep_stats || {};
     const serveStats = ds.serve_stats || {};
     const bpStats = ds.break_point_stats || {};
-
-    // Fall back to summing the two players if deep_stats is missing.
-    const firstServe = serveStats.first_serve_percentage != null
-      ? serveStats.first_serve_percentage
-      : Math.round((p1.firstServePct + p2.firstServePct) / 2);
-    const aces = serveStats.aces != null
-      ? serveStats.aces
-      : (p1.aces + p2.aces);
-    const bpSaved = bpStats.break_points_saved != null
-      ? bpStats.break_points_saved
-      : (p1.bpSaved + p2.bpSaved);
-
+    const firstServe = serveStats.first_serve_percentage != null ? serveStats.first_serve_percentage : Math.round((p1.firstServePct + p2.firstServePct) / 2);
+    const aces = serveStats.aces != null ? serveStats.aces : (p1.aces + p2.aces);
+    const bpSaved = bpStats.break_points_saved != null ? bpStats.break_points_saved : (p1.bpSaved + p2.bpSaved);
     const stats = [
       { label: "1ST SERVE %", value: firstServe + "%" },
       { label: "ACES", value: String(aces) },
       { label: "BP SAVED", value: String(bpSaved) }
     ];
-
     const colY = 1020;
     stats.forEach(function (s, i) {
       const cx = M + (barW / 3) * (i + 0.5);
       ctx.textAlign = "center";
-      ctx.fillStyle = "#f4f6f7";
-      ctx.font = "700 72px 'Space Grotesk', sans-serif";
-      ctx.fillText(s.value, cx, colY);
-      ctx.fillStyle = "#8a929b";
-      ctx.font = "600 22px 'Space Grotesk', sans-serif";
-      ctx.fillText(s.label, cx, colY + 44);
+      ctx.fillStyle = "#f4f6f7"; ctx.font = "700 72px 'Space Grotesk', sans-serif"; ctx.fillText(s.value, cx, colY);
+      ctx.fillStyle = "#8a929b"; ctx.font = "600 22px 'Space Grotesk', sans-serif"; ctx.fillText(s.label, cx, colY + 44);
     });
 
-    // A faint divider above the footer.
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(M, 1200);
-    ctx.lineTo(W - M, 1200);
-    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(M, 1200); ctx.lineTo(W - M, 1200); ctx.stroke();
 
-    // --- 10) Footer: timestamp + credit ---
     const stamp = new Date().toLocaleString();
-    ctx.textAlign = "left";
-    ctx.fillStyle = "#8a929b";
-    ctx.font = "500 24px 'Space Grotesk', sans-serif";
+    ctx.textAlign = "left"; ctx.fillStyle = "#8a929b"; ctx.font = "500 24px 'Space Grotesk', sans-serif";
     ctx.fillText("Updated " + stamp, M, 1260);
-    ctx.textAlign = "right";
-    ctx.fillStyle = accent;
-    ctx.font = "600 24px 'Space Grotesk', sans-serif";
+    ctx.textAlign = "right"; ctx.fillStyle = accent; ctx.font = "600 24px 'Space Grotesk', sans-serif";
     ctx.fillText("BREAK · momentum tracker", W - M, 1260);
+  }
 
-    // --- 11) Save the canvas as a PNG download ---
-    const safe = function (n) {
-      return n.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    };
-    const filename = "break-" + safe(p1.name) + "-vs-" + safe(p2.name) + ".png";
+  // Draw the canvas and place a scaled copy in the Share preview.
+  async function drawSharePreview() {
+    const loaded = $("shareLoaded"), empty = $("shareEmpty");
+    if (!CURRENT) { loaded.classList.add("hidden"); empty.classList.remove("hidden"); return; }
+    loaded.classList.remove("hidden"); empty.classList.add("hidden");
+    await renderShareCanvas();
+    const src = $("shareCanvas");
+    const preview = $("sharePreview");
+    preview.innerHTML = "";
+    const clone = document.createElement("canvas");
+    clone.width = src.width; clone.height = src.height;
+    clone.getContext("2d").drawImage(src, 0, 0);
+    preview.appendChild(clone);
+  }
 
+  async function downloadCard() {
+    if (!CURRENT) { showTab("share"); return; }
+    await renderShareCanvas();
+    const canvas = $("shareCanvas");
+    const safe = function (n) { return String(n).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); };
+    const filename = "break-" + safe(CURRENT.players[0].name) + "-vs-" + safe(CURRENT.players[1].name) + ".png";
     canvas.toBlob(function (blob) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, "image/png");
   }
 
-  // Wire the button to the drawing function.
-  document.getElementById("downloadBtn").addEventListener("click", function () {
-    drawShareCard();
+  $("downloadBtn").addEventListener("click", downloadCard);
+  $("twitterBtn").addEventListener("click", function () {
+    if (!CURRENT) return;
+    const p1 = CURRENT.players[0], p2 = CURRENT.players[1];
+    const wp = winProbabilities(p1, p2);
+    const leader = wp.p1 >= wp.p2 ? p1.name : p2.name;
+    const other = wp.p1 >= wp.p2 ? p2.name : p1.name;
+    const text = leader + " def. " + other + " — " + CURRENT.tournament + " momentum breakdown via Break 🎾";
+    window.open("https://twitter.com/intent/tweet?text=" + encodeURIComponent(text), "_blank", "noopener");
   });
+  $("copyBtn").addEventListener("click", function () {
+    const btn = $("copyBtn");
+    const done = function () { const old = btn.textContent; btn.textContent = "Copied!"; setTimeout(function () { btn.textContent = old; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(location.href).then(done).catch(done);
+    } else { done(); }
+  });
+  $("shareGotoMatches").addEventListener("click", function () { showTab("matches"); });
+
+  /* ===========================================================
+     STEP 16 — DATA LOADING + REFRESH (live → fixtures → fallback)
+     =========================================================== */
+  let liveMatchesCache = [];
+
+  async function loadToday() {
+    showTodaySkeleton();
+    try {
+      todayMatches = await fetchFixtures(0, false);
+      if (todayMatches.length === 0) throw new Error("No fixtures today");
+    } catch (err) {
+      console.warn("Today fixtures failed:", err.message);
+      todayMatches = [];
+    }
+    renderToday();
+  }
+
+  async function loadUpcoming() {
+    showListSkeleton($("upcomingList"), 5);
+    try {
+      let list = await fetchFixtures(0, false);
+      if (list.length === 0) list = await fetchFixtures(1, false);
+      upcomingMatches = list;
+    } catch (err) {
+      console.warn("Upcoming fixtures failed:", err.message);
+      upcomingMatches = [];
+    }
+    renderUpcoming();
+  }
+
+  async function loadRecent() {
+    showListSkeleton($("recentList"), 5);
+    let list = [];
+    try {
+      const d1 = await fetchFixtures(-1, true);
+      const d2 = await fetchFixtures(-2, true);
+      list = d1.concat(d2);
+    } catch (err) {
+      console.warn("Recent fixtures failed:", err.message);
+      list = [];
+    }
+    recentMatches = list;
+    renderRecent();
+  }
+
+  async function tryLive() {
+    try {
+      const res = await fetch(LIVE_API_URL, { headers: LIVE_API_HEADERS });
+      if (!res.ok) throw new Error("Live status " + res.status);
+      const data = await res.json();
+      const events = findEventsArray(data);
+      const matches = [];
+      for (let i = 0; i < events.length; i++) {
+        const m = mapLiveEventToMatch(events[i]);
+        if (m) matches.push(m);
+      }
+      return matches;
+    } catch (err) {
+      console.warn("Live fetch failed:", err.message);
+      return [];
+    }
+  }
+
+  // Refresh button — pull-to-refresh visual + success/failure feedback.
+  const refreshBtn = $("refreshBtn");
+  async function refreshAll() {
+    $("ptr").classList.add("active");
+    const original = "🔄 Refresh live data";
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "Refreshing…";
+
+    let anySuccess = false;
+    try {
+      liveMatchesCache = await tryLive();
+      await loadToday();
+      await loadUpcoming();
+      anySuccess = todayMatches.length > 0 || upcomingMatches.length > 0 || liveMatchesCache.length > 0;
+    } catch (err) {
+      anySuccess = false;
+    }
+
+    const gsInfo = renderGrandSlam();
+    renderNowBar(liveMatchesCache, gsInfo);
+    renderHeroLive(gsInfo, liveMatchesCache);
+
+    $("ptr").classList.remove("active");
+    refreshBtn.disabled = false;
+    if (anySuccess) {
+      refreshBtn.textContent = "✓ Updated";
+      refreshBtn.style.color = "var(--accent)";
+      setTimeout(function () { refreshBtn.textContent = original; refreshBtn.style.color = ""; }, 1500);
+    } else {
+      refreshBtn.textContent = "✗ Couldn't refresh";
+      refreshBtn.style.color = "var(--red)";
+      showToast("Could not reach tennis data. Showing Roland-Garros final.");
+      setTimeout(function () { refreshBtn.textContent = original; refreshBtn.style.color = ""; }, 2000);
+    }
+  }
+  refreshBtn.addEventListener("click", refreshAll);
+
+  function renderHeroLive(gsInfo, liveMatches) {
+    const el = $("heroLive"), txt = $("heroLiveText");
+    if (gsInfo && gsInfo.isLive) {
+      el.classList.remove("hidden");
+      txt.textContent = "● " + gsInfo.slam.name + " LIVE";
+    } else {
+      el.classList.add("hidden");
+    }
+  }
+
+  /* ===========================================================
+     STEP 17 — INIT
+     =========================================================== */
+  function init() {
+    // Pills
+    buildPills($("homePills"), HOME_FILTERS, homeFilter, function (f) { homeFilter = f; buildPills($("homePills"), HOME_FILTERS, homeFilter, arguments.callee); renderToday(); });
+    buildPills($("matchPills"), MATCH_FILTERS, matchFilter, function (f) { matchFilter = f; buildPills($("matchPills"), MATCH_FILTERS, matchFilter, arguments.callee); renderUpcoming(); });
+
+    // Featured + default analysis/share use the Roland-Garros final.
+    renderFeatured(FALLBACK_DATA.matches[0]);
+    loadMatch(FALLBACK_DATA.matches[0]);
+
+    // Grand Slam + Now bar render immediately (no network needed).
+    const gsInfo = renderGrandSlam();
+    renderNowBar([], gsInfo);
+    renderHeroLive(gsInfo, []);
+
+    // Then attempt live data in the background (CORS may block it).
+    (async function () {
+      liveMatchesCache = await tryLive();
+      await loadToday();
+      await loadUpcoming();
+      const gs2 = renderGrandSlam();
+      renderNowBar(liveMatchesCache, gs2);
+      renderHeroLive(gs2, liveMatchesCache);
+      if (todayMatches.length === 0 && upcomingMatches.length === 0 && liveMatchesCache.length === 0) {
+        // Quietly fine — fallback UI already shows. Toast only on explicit refresh.
+      }
+    })();
+  }
+
+  init();
   </script>
 </body>
 </html>
