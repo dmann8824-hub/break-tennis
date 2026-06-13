@@ -1,0 +1,46 @@
+{
+  "fetched_at_utc": "2026-06-13T00:00:00.000Z",
+  "data_source": "completed",
+  "match_count": 1,
+  "matches": [
+    {
+      "tournament": "Roland-Garros · Final",
+      "match_name": "Jannik Sinner vs Carlos Alcaraz",
+      "status": "Completed · 5 sets",
+      "players": [
+        {
+          "name": "Jannik Sinner",
+          "set_scores": [6, 3, 6, 4, 6],
+          "firstServePct": 68,
+          "aces": 14,
+          "doubleFaults": 2,
+          "bpFaced": 8,
+          "bpSaved": 6,
+          "serveTrend": [71, 68, 65, 63, 70]
+        },
+        {
+          "name": "Carlos Alcaraz",
+          "set_scores": [3, 6, 7, 6, 4],
+          "firstServePct": 62,
+          "aces": 9,
+          "doubleFaults": 5,
+          "bpFaced": 11,
+          "bpSaved": 5,
+          "serveTrend": [64, 62, 60, 58, 55]
+        }
+      ],
+      "deep_stats": {
+        "stats_available": true,
+        "serve_stats": {
+          "first_serve_percentage": 65,
+          "aces": 23,
+          "double_faults": 7
+        },
+        "break_point_stats": {
+          "break_points_faced": 19,
+          "break_points_saved": 11
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<!--
+  BREAK — tennis momentum tracker
+  ================================
+  This is the WHOLE website in one file. There are three big parts:
+    1) <style>  — all the looks (colors, layout, the momentum bar, charts)
+    2) <body>   — the visible boxes ("cards") that hold the content
+    3) <script> — all the brains (loading data, the math, drawing the share card)
+  Everything is vanilla HTML/CSS/JS. No frameworks, no libraries, no backend.
+  Read the comments — they explain each part in plain English.
+-->
+<html lang="en" data-surface="clay">
+<head>
+  <meta charset="UTF-8" />
+  <!-- This line makes the site size itself correctly on phones (mobile-first). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Break · Tennis Momentum Tracker</title>
+
+  <!-- Google Font: Space Grotesk. If the phone is offline, the CSS falls back
+       to the system font automatically (see the font-family rule below). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    /* =========================================================
+       COLOR SYSTEM
+       These "--variables" are reusable color names. Changing the
+       surface (clay/grass/hard) just swaps the --accent variables,
+       and everything that uses them updates at once.
+       ========================================================= */
+    :root {
+      --bg:      #0b0d0f;   /* deep near-black page background */
+      --card:    #14181c;   /* dark charcoal card background  */
+      --text:    #f4f6f7;   /* off-white main text            */
+      --muted:   #8a929b;   /* muted gray secondary text      */
+      --border:  rgba(255, 255, 255, 0.07); /* faint card edge */
+      --track:   rgba(255, 255, 255, 0.06); /* empty bar color  */
+
+      /* The accent is set per-surface just below. Defaults to clay. */
+      --accent:     #e0723e;
+      --accent-rgb: 224, 114, 62;
+    }
+
+    /* Each surface only changes the accent color + its RGB version.
+       --accent-rgb lets us build see-through glows like rgba(var(--accent-rgb), .3) */
+    html[data-surface="clay"]  { --accent: #e0723e; --accent-rgb: 224, 114, 62; }
+    html[data-surface="grass"] { --accent: #46b877; --accent-rgb: 70, 184, 119; }
+    html[data-surface="hard"]  { --accent: #5b9bd5; --accent-rgb: 91, 155, 213; }
+
+    /* =========================================================
+       GLOBAL RESETS + SMOOTH SURFACE TRANSITIONS
+       The transition line is what makes the color scheme glide
+       (~0.35s) instead of snapping when you switch surfaces.
+       ========================================================= */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      transition:
+        background-color 0.35s ease,
+        border-color 0.35s ease,
+        color 0.35s ease,
+        fill 0.35s ease,
+        stroke 0.35s ease,
+        box-shadow 0.35s ease;
+    }
+
+    /* Tabular-nums makes all digits the same width so numbers line up. */
+    body {
+      font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      font-feature-settings: "tnum" 1;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      /* A soft accent glow bleeding in from the top so the page feels alive. */
+      background-image: radial-gradient(
+        circle at 85% -5%,
+        rgba(var(--accent-rgb), 0.16),
+        transparent 45%
+      );
+      background-attachment: fixed;
+    }
+
+    /* The whole app lives inside this centered column. Max 720px on desktop. */
+    .wrap {
+      width: 100%;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 20px 16px 48px;
+    }
+
+    /* Sections stack vertically with 16px gaps between them. */
+    .stack { display: flex; flex-direction: column; gap: 16px; }
+
+    /* =========================================================
+       SHARED PIECES: cards, labels, big numbers
+       ========================================================= */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 24px;
+    }
+
+    /* Small uppercase label used above sections (e.g. "WIN PROBABILITY"). */
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--muted);
+    }
+
+    /* =========================================================
+       HEADER: the BREAK wordmark + surface dropdown
+       ========================================================= */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    /* The little colored dot next to the word BREAK. */
+    .brand-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.9);
+    }
+
+    /* The surface chooser. Styled to match the dark theme. */
+    .surface-pick {
+      position: relative;
+    }
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 9px 34px 9px 14px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      outline: none;
+    }
+    select:focus-visible { border-color: var(--accent); }
+    /* The little down-arrow drawn with CSS on the right of the dropdown. */
+    .surface-pick::after {
+      content: "";
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      width: 7px;
+      height: 7px;
+      border-right: 2px solid var(--muted);
+      border-bottom: 2px solid var(--muted);
+      transform: translateY(-65%) rotate(45deg);
+      pointer-events: none;
+    }
+
+    /* =========================================================
+       MATCH HEADER (tournament + match status)
+       ========================================================= */
+    .match-head { text-align: center; }
+    .match-head .tournament {
+      color: var(--accent);
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    .match-head .matchname {
+      font-size: 22px;
+      font-weight: 700;
+      margin-top: 8px;
+    }
+    .match-head .status {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    /* =========================================================
+       WIN PROBABILITY (the centerpiece)
+       ========================================================= */
+    .wp-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 12px;
+    }
+    .wp-side { flex: 1; min-width: 0; }
+    .wp-side.right { text-align: right; }
+    .wp-name {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* The giant percentage numbers. */
+    .wp-pct {
+      font-size: 62px;
+      font-weight: 700;
+      letter-spacing: -2px;
+      line-height: 1;
+      margin-top: 6px;
+    }
+    /* The leader's number glows in the accent color. */
+    .wp-pct.lead {
+      color: var(--accent);
+      text-shadow: 0 0 26px rgba(var(--accent-rgb), 0.45);
+    }
+
+    /* THE SIGNATURE ELEMENT — the momentum bar. */
+    .momentum {
+      position: relative;
+      height: 16px;
+      border-radius: 999px;
+      background: var(--track);
+      margin-top: 22px;
+      overflow: hidden;
+    }
+    .momentum-fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      border-radius: 999px;
+      /* Gradient fill from a deeper accent into the bright accent. */
+      background: linear-gradient(
+        90deg,
+        rgba(var(--accent-rgb), 0.55),
+        var(--accent)
+      );
+      box-shadow: 0 0 18px rgba(var(--accent-rgb), 0.5);
+      /* Width is set by JS. This makes the fill slide when surfaces change. */
+      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+                  background-color 0.35s ease, box-shadow 0.35s ease;
+    }
+    /* The faint white "net" line marking the exact 50/50 middle. */
+    .momentum-center {
+      position: absolute;
+      left: 50%;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      transform: translateX(-1px);
+      background: rgba(255, 255, 255, 0.35);
+    }
+    .wp-foot {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* =========================================================
+       PRESSURE METER
+       ========================================================= */
+    .pressure-item { margin-top: 18px; }
+    .pressure-item:first-of-type { margin-top: 16px; }
+    .pressure-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+    .pressure-name { font-size: 15px; font-weight: 600; }
+    .pressure-status { font-size: 13px; color: var(--muted); }
+    .pressure-status b { color: var(--text); font-weight: 600; }
+    .pbar {
+      height: 12px;
+      border-radius: 999px;
+      background: var(--track);
+      overflow: hidden;
+    }
+    .pbar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(
+        90deg,
+        rgba(var(--accent-rgb), 0.55),
+        var(--accent)
+      );
+      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+                  background-color 0.35s ease;
+    }
+
+    /* =========================================================
+       SERVE QUALITY TREND
+       ========================================================= */
+    .serve-item { margin-top: 20px; }
+    .serve-item:first-of-type { margin-top: 16px; }
+    .serve-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .serve-name { font-size: 15px; font-weight: 600; }
+    .serve-dir {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .serve-chart { width: 100%; height: auto; display: block; }
+    /* The chart line + dots use the accent color and transition smoothly. */
+    .serve-line { fill: none; stroke: var(--accent); stroke-width: 2.5;
+                  stroke-linecap: round; stroke-linejoin: round; }
+    .serve-dot  { fill: var(--accent); }
+    .serve-area { fill: rgba(var(--accent-rgb), 0.16); stroke: none; }
+
+    /* =========================================================
+       DOWNLOAD BUTTON
+       ========================================================= */
+    .download-btn {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 14px;
+      background: var(--accent);
+      color: #0b0d0f;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+      box-shadow: 0 8px 30px rgba(var(--accent-rgb), 0.35);
+    }
+    .download-btn:hover { filter: brightness(1.06); }
+    .download-btn:active { transform: translateY(1px); }
+    .download-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+    .download-btn:disabled { opacity: 0.5; cursor: default; }
+
+    /* =========================================================
+       REFRESH LIVE DATA BUTTON (top of page)
+       A quieter, outlined button so it doesn't fight the bright
+       accent-colored Download button at the bottom.
+       ========================================================= */
+    .refresh-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--card);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+    }
+    .refresh-btn:hover { border-color: var(--accent); }
+    .refresh-btn:active { transform: translateY(1px); }
+    .refresh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .refresh-btn:disabled { opacity: 0.6; cursor: default; }
+
+    /* The little spinning ring. It's hidden until a fetch is running. */
+    .spinner {
+      width: 15px;
+      height: 15px;
+      border: 2px solid rgba(var(--accent-rgb), 0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none; /* shown via JS while loading */
+    }
+    .refresh-btn.loading .spinner { display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Small message under the button, e.g. the "no live matches" note. */
+    .refresh-status {
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      min-height: 16px; /* reserve space so layout doesn't jump */
+    }
+    .refresh-status.live { color: var(--accent); }
+
+    /* =========================================================
+       LOADING STATE (pulsing gray placeholders)
+       Shown while match_data.json is being fetched, then removed.
+       ========================================================= */
+    .skeleton {
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      animation: pulse 1.3s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.45; }
+      50%      { opacity: 0.9; }
+    }
+    .sk-line  { height: 14px; margin: 10px 0; }
+    .sk-big   { height: 60px; margin: 14px 0; }
+    .sk-bar   { height: 16px; border-radius: 999px; margin: 20px 0; }
+    /* These two helpers show/hide whole sections depending on app state. */
+    .hidden { display: none !important; }
+
+    /* The empty/error message box. */
+    .notice {
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+      padding: 8px 0;
+    }
+    .notice b { color: var(--text); }
+
+    /* The footer credit line. */
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      margin-top: 28px;
+    }
+
+    /* Slightly bigger numbers on wider screens. */
+    @media (min-width: 480px) {
+      .wp-pct { font-size: 68px; }
+      .wp-name { font-size: 18px; }
+    }
+
+    /* Respect people who ask their device to reduce motion. */
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="stack">
+
+      <!-- ===== HEADER ===== -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <span>Break</span>
+        </div>
+        <div class="surface-pick">
+          <!-- Changing this dropdown re-themes the whole app. -->
+          <select id="surfaceSelect" aria-label="Court surface">
+            <option value="clay">Clay</option>
+            <option value="grass">Grass</option>
+            <option value="hard">Hardcourt</option>
+          </select>
+        </div>
+      </header>
+
+      <!-- ===== REFRESH LIVE DATA ===== -->
+      <!-- Tries to pull a live match from the Tennis API. If it can't
+           (network blocked, no live matches, bad response), it quietly
+           keeps showing whatever match is already on screen. -->
+      <section>
+        <button class="refresh-btn" id="refreshBtn">
+          <span class="spinner" id="refreshSpinner"></span>
+          <span id="refreshLabel">🔄 Refresh Live Data</span>
+        </button>
+        <div class="refresh-status" id="refreshStatus"></div>
+      </section>
+
+      <!-- ===== MATCH HEADER ===== -->
+      <section class="card match-head" id="matchHead">
+        <!-- Loading placeholder (skeleton). Replaced once data loads. -->
+        <div id="matchHeadSkeleton">
+          <div class="skeleton sk-line" style="width:40%;margin:0 auto;"></div>
+          <div class="skeleton sk-line" style="width:70%;margin:14px auto;"></div>
+        </div>
+        <div id="matchHeadContent" class="hidden">
+          <div class="tournament" id="tournament"></div>
+          <div class="matchname" id="matchname"></div>
+          <div class="status" id="status"></div>
+        </div>
+      </section>
+
+      <!-- ===== WIN PROBABILITY ===== -->
+      <section class="card" id="wpCard">
+        <div class="label">Win Probability</div>
+        <div id="wpSkeleton">
+          <div class="skeleton sk-big" style="width:100%;"></div>
+          <div class="skeleton sk-bar" style="width:100%;"></div>
+        </div>
+        <div id="wpContent" class="hidden">
+          <div class="wp-row" style="margin-top:14px;">
+            <div class="wp-side left">
+              <div class="wp-name" id="p1Name"></div>
+              <div class="wp-pct" id="p1Pct"></div>
+            </div>
+            <div class="wp-side right">
+              <div class="wp-name" id="p2Name"></div>
+              <div class="wp-pct" id="p2Pct"></div>
+            </div>
+          </div>
+          <!-- The momentum bar: fill width = player 1's win %. -->
+          <div class="momentum">
+            <div class="momentum-fill" id="momentumFill"></div>
+            <div class="momentum-center"></div>
+          </div>
+          <div class="wp-foot">
+            <span id="p1FootName"></span>
+            <span id="p2FootName"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== PRESSURE METER ===== -->
+      <section class="card" id="pressureCard">
+        <div class="label">Pressure</div>
+        <div id="pressureSkeleton">
+          <div class="skeleton sk-line" style="width:30%;margin-top:16px;"></div>
+          <div class="skeleton sk-bar" style="width:100%;"></div>
+          <div class="skeleton sk-line" style="width:30%;"></div>
+          <div class="skeleton sk-bar" style="width:100%;"></div>
+        </div>
+        <div id="pressureContent" class="hidden"></div>
+      </section>
+
+      <!-- ===== SERVE QUALITY TREND ===== -->
+      <section class="card" id="serveCard">
+        <div class="label">Serve Quality Trend</div>
+        <div id="serveSkeleton">
+          <div class="skeleton sk-line" style="width:30%;margin-top:16px;"></div>
+          <div class="skeleton" style="width:100%;height:70px;margin:10px 0;"></div>
+          <div class="skeleton sk-line" style="width:30%;"></div>
+          <div class="skeleton" style="width:100%;height:70px;margin:10px 0;"></div>
+        </div>
+        <div id="serveContent" class="hidden"></div>
+      </section>
+
+      <!-- ===== DOWNLOAD SHARE CARD ===== -->
+      <section>
+        <button class="download-btn" id="downloadBtn" disabled>Download Card</button>
+      </section>
+
+      <!-- Hidden canvas where the 1080x1350 share image is drawn. -->
+      <canvas id="shareCanvas" width="1080" height="1350" style="display:none;"></canvas>
+
+      <div class="footer">Break · momentum tracker</div>
+    </div>
+  </div>
+
+  <script>
+  /* ===========================================================
+     STEP 0 — THE FALLBACK DATA
+     This is the exact Roland-Garros final data. If match_data.json
+     can't be loaded (e.g. opened straight from your computer, or the
+     file is missing), the app uses THIS instead so it never looks broken.
+     =========================================================== */
+  const FALLBACK_DATA = {
+    "fetched_at_utc": "2026-06-13T00:00:00.000Z",
+    "data_source": "completed",
+    "match_count": 1,
+    "matches": [
+      {
+        "tournament": "Roland-Garros · Final",
+        "match_name": "Jannik Sinner vs Carlos Alcaraz",
+        "status": "Completed · 5 sets",
+        "players": [
+          {
+            "name": "Jannik Sinner",
+            "set_scores": [6, 3, 6, 4, 6],
+            "firstServePct": 68,
+            "aces": 14,
+            "doubleFaults": 2,
+            "bpFaced": 8,
+            "bpSaved": 6,
+            "serveTrend": [71, 68, 65, 63, 70]
+          },
+          {
+            "name": "Carlos Alcaraz",
+            "set_scores": [3, 6, 7, 6, 4],
+            "firstServePct": 62,
+            "aces": 9,
+            "doubleFaults": 5,
+            "bpFaced": 11,
+            "bpSaved": 5,
+            "serveTrend": [64, 62, 60, 58, 55]
+          }
+        ],
+        "deep_stats": {
+          "stats_available": true,
+          "serve_stats": {
+            "first_serve_percentage": 65,
+            "aces": 23,
+            "double_faults": 7
+          },
+          "break_point_stats": {
+            "break_points_faced": 19,
+            "break_points_saved": 11
+          }
+        }
+      }
+    ]
+  };
+
+  /* A spot to remember the match we're showing, plus the computed numbers,
+     so the "Download Card" button can reuse them when drawing the image. */
+  let CURRENT = null;
+
+  /* ===========================================================
+     STEP 1 — SURFACE THEMING (clay / grass / hard)
+     We save the choice in localStorage so it sticks next visit.
+     =========================================================== */
+  const SURFACE_KEY = "break_surface";
+  const surfaceSelect = document.getElementById("surfaceSelect");
+
+  function applySurface(surface) {
+    // Put the choice on the <html> tag. The CSS reads this to swap colors.
+    document.documentElement.setAttribute("data-surface", surface);
+    surfaceSelect.value = surface;
+    localStorage.setItem(SURFACE_KEY, surface);
+  }
+
+  // On first load: use the saved surface, or default to clay.
+  const savedSurface = localStorage.getItem(SURFACE_KEY) || "clay";
+  applySurface(savedSurface);
+
+  // When the dropdown changes, re-theme instantly (CSS handles the smooth glide).
+  surfaceSelect.addEventListener("change", function () {
+    applySurface(surfaceSelect.value);
+  });
+
+  /* ===========================================================
+     STEP 2 — THE MATH
+     Three calculators: win probability, pressure, and serve trend.
+     =========================================================== */
+
+  // Count how many sets a player won by comparing their set scores
+  // to the opponent's, set by set.
+  function setsWon(meScores, oppScores) {
+    let count = 0;
+    for (let i = 0; i < meScores.length; i++) {
+      if (meScores[i] > oppScores[i]) count++;
+    }
+    return count;
+  }
+
+  // Add up all games a player won across every set.
+  function totalGames(scores) {
+    return scores.reduce(function (sum, g) { return sum + g; }, 0);
+  }
+
+  // Turn one player's stats into a single "strength score".
+  function strengthScore(me, opp) {
+    let score = 20; // base score
+
+    score += setsWon(me.set_scores, opp.set_scores) * 8;   // +8 per set won
+    score += totalGames(me.set_scores) * 2;                // +2 per game won
+    score += me.firstServePct * 0.3;                       // +0.3 per 1st-serve % point
+    score += me.aces * 1.5;                                // +1.5 per ace
+    score += me.doubleFaults * -1.5;                       // -1.5 per double fault
+    score += me.bpSaved * 2;                               // +2 per break point saved
+
+    const bpLost = me.bpFaced - me.bpSaved;                // break points lost
+    score += bpLost * -3;                                  // -3 per break point lost
+
+    return score;
+  }
+
+  // Convert both strength scores into win % that add up to 100,
+  // and never go below 5% or above 95%.
+  function winProbabilities(p1, p2) {
+    const s1 = strengthScore(p1, p2);
+    const s2 = strengthScore(p2, p1);
+    const total = s1 + s2;
+
+    // Guard against dividing by zero in a weird edge case.
+    let pct1 = total === 0 ? 50 : (s1 / total) * 100;
+
+    pct1 = Math.max(5, Math.min(95, pct1)); // clamp 5–95
+    const pct2 = 100 - pct1;
+
+    return {
+      p1: Math.round(pct1),
+      p2: Math.round(pct2)
+    };
+  }
+
+  // Pressure score (0–100) for one player, given their win %.
+  function pressureScore(player, winPct) {
+    let score = 0;
+    score += player.bpFaced * 8;                          // +8 per BP faced
+    const bpUnsaved = player.bpFaced - player.bpSaved;
+    score += bpUnsaved * 15;                              // +15 per BP not saved
+
+    // Trailing in win probability adds up to +40 (only if behind).
+    let trailing = (50 - winPct) * 0.8;
+    trailing = Math.max(0, Math.min(40, trailing));
+    score += trailing;
+
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+
+  // Turn a pressure score into a word.
+  function pressureLabel(score) {
+    if (score <= 39) return "Calm";
+    if (score <= 69) return "Building";
+    return "High";
+  }
+
+  // Decide if a serve trend is Improving / Dipping / Steady.
+  function serveDirection(trend) {
+    if (!trend || trend.length < 2) return "Steady";
+    const diff = trend[trend.length - 1] - trend[0]; // last minus first
+    if (diff >= 4) return "Improving";
+    if (diff <= -4) return "Dipping";
+    return "Steady";
+  }
+
+  /* ===========================================================
+     STEP 3 — BUILD A SERVE CHART (as an SVG string)
+     Simple line + shaded area + dots. No axes, no gridlines.
+     viewBox is 300x70. We map the data values into that box.
+     =========================================================== */
+  function buildServeChart(trend) {
+    const W = 300, H = 70, PAD = 10; // drawing area with a little breathing room
+
+    // Live data often has no per-set serve trend. If we have fewer than 2
+    // points there's no line to draw, so show a calm "no data" placeholder
+    // instead of crashing.
+    if (!Array.isArray(trend) || trend.length < 2) {
+      return '<svg class="serve-chart" viewBox="0 0 ' + W + ' ' + H +
+             '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
+             '<line x1="' + PAD + '" y1="' + (H / 2) + '" x2="' + (W - PAD) +
+             '" y2="' + (H / 2) + '" stroke="var(--track)" stroke-width="2" ' +
+             'stroke-dasharray="4 5" stroke-linecap="round" />' +
+             '<text x="' + (W / 2) + '" y="' + (H / 2 - 8) +
+             '" fill="var(--muted)" font-size="11" text-anchor="middle" ' +
+             'font-family="Space Grotesk, sans-serif">No serve-trend data</text>' +
+             '</svg>';
+    }
+
+    const min = Math.min.apply(null, trend);
+    const max = Math.max.apply(null, trend);
+    const range = (max - min) || 1; // avoid divide-by-zero if all values equal
+
+    // Convert each data value into an (x, y) point inside the box.
+    const points = trend.map(function (val, i) {
+      const x = PAD + (i / (trend.length - 1)) * (W - PAD * 2);
+      // Higher value = higher on the chart, so we flip y.
+      const y = H - PAD - ((val - min) / range) * (H - PAD * 2);
+      return { x: x, y: y };
+    });
+
+    // The line path: move to the first point, then line to the rest.
+    let linePath = "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
+    for (let i = 1; i < points.length; i++) {
+      linePath += " L " + points[i].x.toFixed(1) + " " + points[i].y.toFixed(1);
+    }
+
+    // The shaded area: same line, then drop down to the bottom and close.
+    let areaPath = linePath +
+      " L " + points[points.length - 1].x.toFixed(1) + " " + (H - PAD) +
+      " L " + points[0].x.toFixed(1) + " " + (H - PAD) + " Z";
+
+    // The little dots on each data point.
+    let dots = "";
+    points.forEach(function (p) {
+      dots += '<circle class="serve-dot" cx="' + p.x.toFixed(1) +
+              '" cy="' + p.y.toFixed(1) + '" r="3" />';
+    });
+
+    return '<svg class="serve-chart" viewBox="0 0 ' + W + ' ' + H +
+           '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
+           '<path class="serve-area" d="' + areaPath + '" />' +
+           '<path class="serve-line" d="' + linePath + '" />' +
+           dots +
+           '</svg>';
+  }
+
+  /* ===========================================================
+     STEP 4 — RENDER EVERYTHING ON THE PAGE
+     Takes the match object, runs the math, fills in the HTML,
+     and hides the loading skeletons.
+     =========================================================== */
+  function renderMatch(match) {
+    const p1 = match.players[0];
+    const p2 = match.players[1];
+
+    // --- Win probability ---
+    const wp = winProbabilities(p1, p2);
+    const p1Leads = wp.p1 >= wp.p2;
+
+    // --- Pressure ---
+    const pr1 = pressureScore(p1, wp.p1);
+    const pr2 = pressureScore(p2, wp.p2);
+
+    // Remember everything for the share card later.
+    CURRENT = {
+      match: match,
+      p1: p1, p2: p2,
+      wp: wp,
+      p1Leads: p1Leads,
+      pressure1: pr1, pressure2: pr2
+    };
+
+    // Match header
+    document.getElementById("tournament").textContent = match.tournament;
+    document.getElementById("matchname").textContent = match.match_name;
+    document.getElementById("status").textContent = match.status;
+
+    // Win probability numbers + names
+    document.getElementById("p1Name").textContent = p1.name;
+    document.getElementById("p2Name").textContent = p2.name;
+    document.getElementById("p1Pct").textContent = wp.p1 + "%";
+    document.getElementById("p2Pct").textContent = wp.p2 + "%";
+    document.getElementById("p1FootName").textContent = p1.name;
+    document.getElementById("p2FootName").textContent = p2.name;
+
+    // Glow the leader's percentage.
+    document.getElementById("p1Pct").classList.toggle("lead", p1Leads);
+    document.getElementById("p2Pct").classList.toggle("lead", !p1Leads);
+
+    // The momentum bar width = player 1's win %.
+    document.getElementById("momentumFill").style.width = wp.p1 + "%";
+
+    // --- Pressure bars ---
+    const pressureHTML = [p1, p2].map(function (player, idx) {
+      const score = idx === 0 ? pr1 : pr2;
+      const label = pressureLabel(score);
+      return '' +
+        '<div class="pressure-item">' +
+          '<div class="pressure-top">' +
+            '<span class="pressure-name">' + player.name + '</span>' +
+            '<span class="pressure-status"><b>' + label + '</b> · ' + score + '</span>' +
+          '</div>' +
+          '<div class="pbar"><div class="pbar-fill" style="width:' + score + '%"></div></div>' +
+        '</div>';
+    }).join("");
+    document.getElementById("pressureContent").innerHTML = pressureHTML;
+
+    // --- Serve trend charts ---
+    const serveHTML = [p1, p2].map(function (player) {
+      const dir = serveDirection(player.serveTrend);
+      return '' +
+        '<div class="serve-item">' +
+          '<div class="serve-top">' +
+            '<span class="serve-name">' + player.name + '</span>' +
+            '<span class="serve-dir">' + dir + '</span>' +
+          '</div>' +
+          buildServeChart(player.serveTrend) +
+        '</div>';
+    }).join("");
+    document.getElementById("serveContent").innerHTML = serveHTML;
+
+    // --- Swap skeletons for real content ---
+    showContent();
+
+    // The card can be drawn now.
+    document.getElementById("downloadBtn").disabled = false;
+  }
+
+  // Hide all skeletons and reveal all the real content blocks.
+  function showContent() {
+    document.getElementById("matchHeadSkeleton").classList.add("hidden");
+    document.getElementById("matchHeadContent").classList.remove("hidden");
+    document.getElementById("wpSkeleton").classList.add("hidden");
+    document.getElementById("wpContent").classList.remove("hidden");
+    document.getElementById("pressureSkeleton").classList.add("hidden");
+    document.getElementById("pressureContent").classList.remove("hidden");
+    document.getElementById("serveSkeleton").classList.add("hidden");
+    document.getElementById("serveContent").classList.remove("hidden");
+  }
+
+  // If there is truly no match anywhere, show a calm message but stay tidy.
+  function renderEmpty() {
+    document.getElementById("matchHeadSkeleton").classList.add("hidden");
+    document.getElementById("matchHeadContent").classList.remove("hidden");
+    document.getElementById("tournament").textContent = "No match loaded";
+    document.getElementById("matchname").textContent = "Break is ready";
+    document.getElementById("status").textContent = "Add a match to see the analysis";
+
+    document.getElementById("wpSkeleton").innerHTML =
+      '<div class="notice">Drop a <b>match_data.json</b> file next to this page to see win probability, pressure, and serve trends.</div>';
+    document.getElementById("pressureSkeleton").innerHTML =
+      '<div class="notice">No pressure data yet.</div>';
+    document.getElementById("serveSkeleton").innerHTML =
+      '<div class="notice">No serve data yet.</div>';
+  }
+
+  /* ===========================================================
+     STEP 5 — LOAD THE DATA
+     Try match_data.json first. If anything goes wrong, fall back
+     to the hardcoded Roland-Garros final so the app always works.
+     =========================================================== */
+  function pickMatch(data) {
+    // Make sure the data actually has a match inside it.
+    if (data && Array.isArray(data.matches) && data.matches.length > 0) {
+      return data.matches[0];
+    }
+    return null;
+  }
+
+  async function loadData() {
+    try {
+      // Try to fetch the real file sitting next to index.html.
+      const res = await fetch("match_data.json", { cache: "no-store" });
+      if (!res.ok) throw new Error("File responded with status " + res.status);
+      const data = await res.json();
+      const match = pickMatch(data);
+      if (!match) throw new Error("No matches inside the file");
+      renderMatch(match);
+    } catch (err) {
+      // Something failed (offline, missing file, opened via file:// etc).
+      // Use the hardcoded real match data instead.
+      console.warn("Using fallback data. Reason:", err.message);
+      const match = pickMatch(FALLBACK_DATA);
+      if (match) {
+        renderMatch(match);
+      } else {
+        renderEmpty();
+      }
+    }
+  }
+
+  // Kick everything off.
+  loadData();
+
+  /* ===========================================================
+     STEP 5B — REFRESH LIVE DATA (from the Tennis API)
+     ------------------------------------------------------------
+     This calls the RapidAPI Tennis endpoint straight from the
+     browser. Two honest realities to know:
+       1) The API key below is visible to anyone who views this
+          page's source. That's unavoidable in a browser-only app.
+       2) Browsers often block direct calls to RapidAPI (a rule
+          called CORS). If that happens, the fetch fails and we
+          simply keep showing the Roland-Garros final, with a note.
+     Either way the app never breaks — worst case it falls back.
+     =========================================================== */
+  const LIVE_API_URL =
+    "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/extend/api/events/live/tennis/";
+  const LIVE_API_HEADERS = {
+    "x-rapidapi-key": "cf9e49b00amshb6126622a1dd5aep18a720jsn1ee2048ea169",
+    "x-rapidapi-host": "tennis-api-atp-wta-itf.p.rapidapi.com"
+  };
+
+  const refreshBtn = document.getElementById("refreshBtn");
+  const refreshSpinner = document.getElementById("refreshSpinner");
+  const refreshLabel = document.getElementById("refreshLabel");
+  const refreshStatus = document.getElementById("refreshStatus");
+
+  // Turn the button's loading spinner on/off.
+  function setRefreshLoading(isLoading) {
+    refreshBtn.disabled = isLoading;
+    refreshBtn.classList.toggle("loading", isLoading);
+    refreshLabel.textContent = isLoading ? "Refreshing…" : "🔄 Refresh Live Data";
+  }
+
+  // Show a small message under the button. "live=true" tints it the accent color.
+  function setRefreshStatus(message, isLive) {
+    refreshStatus.textContent = message || "";
+    refreshStatus.classList.toggle("live", !!isLive);
+  }
+
+  // --- Tiny helpers that read messy API data safely ---
+
+  // Return the first value found among several possible key names.
+  function firstOf(obj, keys) {
+    if (!obj) return undefined;
+    for (let i = 0; i < keys.length; i++) {
+      if (obj[keys[i]] !== undefined && obj[keys[i]] !== null) return obj[keys[i]];
+    }
+    return undefined;
+  }
+
+  // The API might wrap the events list in different places. Find the array.
+  function findEventsArray(data) {
+    if (Array.isArray(data)) return data;
+    const candidate = firstOf(data, ["data", "events", "results", "matches", "response", "result"]);
+    if (Array.isArray(candidate)) return candidate;
+    // Sometimes it's nested one more level, e.g. { data: { events: [...] } }
+    if (candidate && typeof candidate === "object") {
+      const inner = firstOf(candidate, ["events", "results", "matches", "data"]);
+      if (Array.isArray(inner)) return inner;
+    }
+    return [];
+  }
+
+  // Pull a readable player name out of whatever shape a "team/player" is.
+  function readName(team) {
+    if (!team) return null;
+    if (typeof team === "string") return team;
+    const name = firstOf(team, ["name", "fullName", "player", "shortName", "title"]);
+    return name ? String(name) : null;
+  }
+
+  // Try to read set-by-set scores for one side. Returns an array like [6,3,6].
+  function readSetScores(scoreObj) {
+    if (!scoreObj) return [];
+    if (Array.isArray(scoreObj)) {
+      return scoreObj.map(Number).filter(function (n) { return !isNaN(n); });
+    }
+    // Common shape: { period1: 6, period2: 3, ... }
+    const sets = [];
+    for (let i = 1; i <= 5; i++) {
+      const v = firstOf(scoreObj, ["period" + i, "set" + i, "s" + i]);
+      if (v !== undefined && v !== null && !isNaN(Number(v))) sets.push(Number(v));
+    }
+    return sets;
+  }
+
+  // Turn ONE live event into a match object shaped exactly like Break expects.
+  // Live lists rarely include deep serve/break stats, so those default to 0
+  // and the serve-trend stays empty (the chart shows a "no data" placeholder).
+  function mapLiveEventToMatch(ev) {
+    // Find the two sides under any of these common key names.
+    const homeTeam = firstOf(ev, ["homeTeam", "home", "player1", "firstPlayer", "team1", "p1"]);
+    const awayTeam = firstOf(ev, ["awayTeam", "away", "player2", "secondPlayer", "team2", "p2"]);
+
+    let n1 = readName(homeTeam);
+    let n2 = readName(awayTeam);
+
+    // Fallback: some APIs use a "teams" array, or flat name fields.
+    if ((!n1 || !n2) && Array.isArray(ev.teams) && ev.teams.length >= 2) {
+      n1 = n1 || readName(ev.teams[0]);
+      n2 = n2 || readName(ev.teams[1]);
+    }
+    n1 = n1 || (typeof ev.event_first_player === "string" ? ev.event_first_player : null);
+    n2 = n2 || (typeof ev.event_second_player === "string" ? ev.event_second_player : null);
+
+    // No two names = not a match we can use.
+    if (!n1 || !n2) return null;
+
+    // Look for set scores under common spots.
+    const homeScore = firstOf(ev, ["homeScore", "scoreHome", "score1", "homeSets", "p1Score"]);
+    const awayScore = firstOf(ev, ["awayScore", "scoreAway", "score2", "awaySets", "p2Score"]);
+
+    return {
+      tournament: String(
+        firstOf(ev, ["tournamentName"]) ||
+        readName(firstOf(ev, ["tournament", "league", "competition", "season"])) ||
+        "Live Tennis"
+      ),
+      match_name: n1 + " vs " + n2,
+      status: String(firstOf(ev, ["statusText", "status", "round", "roundName"]) || "Live"),
+      players: [
+        {
+          name: n1,
+          set_scores: readSetScores(homeScore),
+          firstServePct: 0, aces: 0, doubleFaults: 0,
+          bpFaced: 0, bpSaved: 0, serveTrend: []
+        },
+        {
+          name: n2,
+          set_scores: readSetScores(awayScore),
+          firstServePct: 0, aces: 0, doubleFaults: 0,
+          bpFaced: 0, bpSaved: 0, serveTrend: []
+        }
+      ]
+      // No deep_stats on purpose — the share card will compute from players.
+    };
+  }
+
+  // The main action: fetch, parse, and either show live data or fall back.
+  async function refreshLiveData() {
+    setRefreshLoading(true);
+    setRefreshStatus("");
+
+    try {
+      const res = await fetch(LIVE_API_URL, { headers: LIVE_API_HEADERS });
+      if (!res.ok) throw new Error("API status " + res.status);
+
+      const data = await res.json();
+      const events = findEventsArray(data);
+
+      // Try each event until we find one we can actually use.
+      let liveMatch = null;
+      for (let i = 0; i < events.length; i++) {
+        liveMatch = mapLiveEventToMatch(events[i]);
+        if (liveMatch) break;
+      }
+
+      if (liveMatch) {
+        renderMatch(liveMatch);
+        setRefreshStatus("● Live — " + liveMatch.match_name, true);
+      } else {
+        // API worked but had no usable live matches.
+        throw new Error("No usable live matches");
+      }
+    } catch (err) {
+      // Anything went wrong (blocked by browser/CORS, no live matches,
+      // bad data). Keep the app looking good with the known final.
+      console.warn("Live refresh failed. Reason:", err.message);
+      const fallback = pickMatch(FALLBACK_DATA);
+      if (fallback) renderMatch(fallback);
+      setRefreshStatus("No live matches right now — showing Roland-Garros final", false);
+    } finally {
+      setRefreshLoading(false);
+    }
+  }
+
+  // Wire the button.
+  refreshBtn.addEventListener("click", refreshLiveData);
+
+  /* ===========================================================
+     STEP 6 — THE SHARE CARD (drawn by hand on a canvas)
+     Builds a premium 1080x1350 PNG and downloads it.
+     =========================================================== */
+
+  // Read the current accent color straight from the CSS, so the card
+  // always matches whatever surface the user picked.
+  function currentAccent() {
+    return getComputedStyle(document.documentElement)
+      .getPropertyValue("--accent").trim() || "#e0723e";
+  }
+
+  // Turn a hex color (#rrggbb) into an "r,g,b" string for see-through fills.
+  function hexToRgb(hex) {
+    const h = hex.replace("#", "");
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    return r + "," + g + "," + b;
+  }
+
+  // Helper: draw a rounded rectangle path (used for the momentum bar).
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  async function drawShareCard() {
+    if (!CURRENT) return;
+
+    // Wait for the Space Grotesk font to be ready so canvas text uses it.
+    if (document.fonts && document.fonts.ready) {
+      try { await document.fonts.ready; } catch (e) { /* ignore */ }
+    }
+
+    const canvas = document.getElementById("shareCanvas");
+    const ctx = canvas.getContext("2d");
+    const W = 1080, H = 1350;
+
+    const accent = currentAccent();
+    const accentRgb = hexToRgb(accent);
+    const match = CURRENT.match;
+    const p1 = CURRENT.p1, p2 = CURRENT.p2;
+    const wp = CURRENT.wp;
+    const leader = CURRENT.p1Leads ? p1 : p2;
+    const leaderPct = CURRENT.p1Leads ? wp.p1 : wp.p2;
+
+    // --- 1) Dark background ---
+    ctx.fillStyle = "#0b0d0f";
+    ctx.fillRect(0, 0, W, H);
+
+    // --- 2) Soft radial glow from the top-right corner ---
+    const glow = ctx.createRadialGradient(W - 120, 60, 60, W - 120, 60, 720);
+    glow.addColorStop(0, "rgba(" + accentRgb + ",0.30)");
+    glow.addColorStop(1, "rgba(" + accentRgb + ",0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
+
+    // --- 3) Thin accent bar across the very top ---
+    ctx.fillStyle = accent;
+    ctx.fillRect(0, 0, W, 8);
+
+    const M = 80; // left/right margin used throughout the card
+
+    // --- 4) BREAK wordmark + colored dot ---
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(M + 9, 92, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f4f6f7";
+    ctx.font = "700 40px 'Space Grotesk', sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("BREAK", M + 32, 105);
+
+    // --- 5) Tournament name (muted uppercase) ---
+    ctx.fillStyle = "#8a929b";
+    ctx.font = "600 24px 'Space Grotesk', sans-serif";
+    ctx.fillText(match.tournament.toUpperCase(), M, 160);
+
+    // --- 6) Both player names with set scores aligned right ---
+    function fmtScores(scores) { return scores.join("  "); }
+
+    ctx.font = "700 50px 'Space Grotesk', sans-serif";
+    ctx.fillStyle = CURRENT.p1Leads ? "#f4f6f7" : "#8a929b";
+    ctx.textAlign = "left";
+    ctx.fillText(p1.name, M, 270);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 44px 'Space Grotesk', sans-serif";
+    ctx.fillText(fmtScores(p1.set_scores), W - M, 270);
+
+    ctx.font = "700 50px 'Space Grotesk', sans-serif";
+    ctx.fillStyle = CURRENT.p1Leads ? "#8a929b" : "#f4f6f7";
+    ctx.textAlign = "left";
+    ctx.fillText(p2.name, M, 340);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 44px 'Space Grotesk', sans-serif";
+    ctx.fillText(fmtScores(p2.set_scores), W - M, 340);
+
+    // --- 7) "WIN PROBABILITY" label + giant percentage ---
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#8a929b";
+    ctx.font = "600 26px 'Space Grotesk', sans-serif";
+    ctx.fillText("WIN PROBABILITY", W / 2, 470);
+
+    // The giant number in the accent color.
+    ctx.fillStyle = accent;
+    ctx.font = "700 210px 'Space Grotesk', sans-serif";
+    ctx.fillText(leaderPct + "%", W / 2, 660);
+
+    // "[Player] to win"
+    ctx.fillStyle = "#f4f6f7";
+    ctx.font = "600 36px 'Space Grotesk', sans-serif";
+    ctx.fillText(leader.name + " to win", W / 2, 730);
+
+    // --- 8) Momentum bar (matches the live UI) ---
+    const barX = M, barY = 800, barW = W - M * 2, barH = 26;
+    // Track
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    roundRect(ctx, barX, barY, barW, barH, barH / 2);
+    ctx.fill();
+    // Fill = player 1's win %
+    const fillW = Math.max(barH, barW * (wp.p1 / 100));
+    const barGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+    barGrad.addColorStop(0, "rgba(" + accentRgb + ",0.55)");
+    barGrad.addColorStop(1, accent);
+    ctx.fillStyle = barGrad;
+    roundRect(ctx, barX, barY, fillW, barH, barH / 2);
+    ctx.fill();
+    // Center "net" line
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.fillRect(barX + barW / 2 - 1, barY, 2, barH);
+
+    // --- 9) Three stat columns (match totals from deep_stats) ---
+    const ds = match.deep_stats || {};
+    const serveStats = ds.serve_stats || {};
+    const bpStats = ds.break_point_stats || {};
+
+    // Fall back to summing the two players if deep_stats is missing.
+    const firstServe = serveStats.first_serve_percentage != null
+      ? serveStats.first_serve_percentage
+      : Math.round((p1.firstServePct + p2.firstServePct) / 2);
+    const aces = serveStats.aces != null
+      ? serveStats.aces
+      : (p1.aces + p2.aces);
+    const bpSaved = bpStats.break_points_saved != null
+      ? bpStats.break_points_saved
+      : (p1.bpSaved + p2.bpSaved);
+
+    const stats = [
+      { label: "1ST SERVE %", value: firstServe + "%" },
+      { label: "ACES", value: String(aces) },
+      { label: "BP SAVED", value: String(bpSaved) }
+    ];
+
+    const colY = 1020;
+    stats.forEach(function (s, i) {
+      const cx = M + (barW / 3) * (i + 0.5);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#f4f6f7";
+      ctx.font = "700 72px 'Space Grotesk', sans-serif";
+      ctx.fillText(s.value, cx, colY);
+      ctx.fillStyle = "#8a929b";
+      ctx.font = "600 22px 'Space Grotesk', sans-serif";
+      ctx.fillText(s.label, cx, colY + 44);
+    });
+
+    // A faint divider above the footer.
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(M, 1200);
+    ctx.lineTo(W - M, 1200);
+    ctx.stroke();
+
+    // --- 10) Footer: timestamp + credit ---
+    const stamp = new Date().toLocaleString();
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#8a929b";
+    ctx.font = "500 24px 'Space Grotesk', sans-serif";
+    ctx.fillText("Updated " + stamp, M, 1260);
+    ctx.textAlign = "right";
+    ctx.fillStyle = accent;
+    ctx.font = "600 24px 'Space Grotesk', sans-serif";
+    ctx.fillText("BREAK · momentum tracker", W - M, 1260);
+
+    // --- 11) Save the canvas as a PNG download ---
+    const safe = function (n) {
+      return n.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    };
+    const filename = "break-" + safe(p1.name) + "-vs-" + safe(p2.name) + ".png";
+
+    canvas.toBlob(function (blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, "image/png");
+  }
+
+  // Wire the button to the drawing function.
+  document.getElementById("downloadBtn").addEventListener("click", function () {
+    drawShareCard();
+  });
+  </script>
+</body>
+</html>
